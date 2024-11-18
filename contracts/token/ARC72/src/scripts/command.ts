@@ -1,24 +1,13 @@
 import { Command } from "commander";
 import axios from "axios";
 import {
-  Osarc200TokenClient as OSARC200TokenClient,
-  APP_SPEC as OSARC200TokenSpec,
-} from "./clients/OSARC200TokenClient.js";
-import {
-  Osarc200TokenFactoryClient as OSARC200TokenFactoryClient,
-  APP_SPEC as OSARC200TokenFactorySpec,
-} from "./clients/OSARC200TokenFactoryClient.js";
-import {
-  OwnableClient as OwnableClient,
-  APP_SPEC as OwnableSpec,
-} from "./clients/OwnableClient.js";
-import {
-  Osarc72TokenClient as OSARC72TokenClient,
-  APP_SPEC as OSARC72TokenSpec,
-} from "./clients/OSARC72TokenClient.js";
+  VnsRegistryClient as VNSRegistryClient,
+  APP_SPEC as VNSRegistrySpec,
+} from "./clients/VNSRegistryClient.js";
 import algosdk, {
   AtomicTransactionComposer,
   makePaymentTxnWithSuggestedParamsFromObject,
+  OnApplicationComplete,
   TransactionSigner,
   waitForConfirmation,
 } from "algosdk";
@@ -28,7 +17,18 @@ import * as dotenv from "dotenv";
 import BigNumber from "bignumber.js";
 import fs from "fs";
 import { SendTransactionFrom } from "@algorandfoundation/algokit-utils/types/transaction.js";
+import crypto from "crypto";
+import pkg from "js-sha3";
+const { keccak256 } = pkg;
 dotenv.config({ path: ".env" });
+
+export const ALGORAND_ZERO_ADDRESS_STRING =
+  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ";
+
+export const minBalance = 100000;
+const extraPages = 1;
+export const extraPageCost = 100000 * (1 + extraPages);
+export const recordBoxCost = 49300;
 
 function stripTrailingZeroBytes(str: string) {
   return str.replace(/\0+$/, ""); // Matches one or more '\0' at the end of the string and removes them
@@ -53,30 +53,93 @@ function uint8ArrayToBigInt(uint8Array: Uint8Array) {
   return result;
 }
 
+export function bytesToHex(bytes: Uint8Array): string {
+  return bytes.reduce(
+    (acc, byte) => acc + byte.toString(16).padStart(2, "0"),
+    ""
+  );
+}
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64");
+}
+
+export function hash(label: string, algorithm: string = "sha256"): Uint8Array {
+  const labelBytes = Buffer.from(label, "utf8");
+  return algorithm === "keccak256"
+    ? new Uint8Array(keccak256.arrayBuffer(labelBytes))
+    : new Uint8Array(crypto.createHash(algorithm).update(labelBytes).digest());
+}
+
+export function namehash(
+  name: string,
+  algorithm: string = "sha256"
+): Uint8Array {
+  if (!name) {
+    return new Uint8Array(32); // Return 32 bytes of zeros for empty name
+  }
+
+  // Split the name into labels and reverse them
+  const labels = name.split(".").reverse();
+
+  // Start with empty hash (32 bytes of zeros)
+  let node = new Uint8Array(32);
+
+  // Hash each label
+  for (const label of labels) {
+    if (label) {
+      // Skip empty labels
+      // Hash the label
+      const labelHash = hash(label, algorithm);
+
+      // Concatenate current node hash with label hash and hash again
+      const combined = new Uint8Array([...node, ...labelHash]);
+      node =
+        algorithm === "keccak256"
+          ? new Uint8Array(keccak256.arrayBuffer(combined))
+          : new Uint8Array(
+              crypto.createHash(algorithm).update(combined).digest()
+            );
+    }
+  }
+
+  return node;
+}
+
 export const program = new Command();
 
-const { MN } = process.env;
+const { MN, MN2, MN3 } = process.env;
 
 export const acc = algosdk.mnemonicToSecretKey(MN || "");
 export const { addr, sk } = acc;
 
+export const acc2 = algosdk.mnemonicToSecretKey(MN2 || "");
+export const { addr: addr2, sk: sk2 } = acc2;
+
+export const acc3 = algosdk.mnemonicToSecretKey(MN3 || "");
+export const { addr: addr3, sk: sk3 } = acc3;
+
 export const addressses = {
   deployer: addr,
+  owner: addr2,
+  registrar: addr3,
 };
 
 export const sks = {
   deployer: sk,
+  owner: sk2,
+  registrar: sk3,
 };
 
 // TESTNET
-// const ALGO_SERVER = "https://testnet-api.voi.nodly.io";
-// const ALGO_INDEXER_SERVER = "https://testnet-idx.voi.nodly.io";
-// const ARC72_INDEXER_SERVER = "https://arc72-idx.nautilus.sh";
+const ALGO_SERVER = "https://testnet-api.voi.nodely.io";
+const ALGO_INDEXER_SERVER = "https://testnet-idx.voi.nodely.io";
+const ARC72_INDEXER_SERVER = "https://arc72-idx.nautilus.sh";
 
 // MAINNET
-const ALGO_SERVER = "https://mainnet-api.voi.nodely.dev";
-const ALGO_INDEXER_SERVER = "https://mainnet-idx.voi.nodely.dev";
-const ARC72_INDEXER_SERVER = "https://mainnet-idx.nautilus.sh";
+// const ALGO_SERVER = "https://mainnet-api.voi.nodely.dev";
+// const ALGO_INDEXER_SERVER = "https://mainnet-idx.voi.nodely.dev";
+// const ARC72_INDEXER_SERVER = "https://mainnet-idx.nautilus.sh";
 
 const algodServerURL = process.env.ALGOD_SERVER || ALGO_SERVER;
 const algodClient = new algosdk.Algodv2(
@@ -91,40 +154,6 @@ const indexerClient = new algosdk.Indexer(
   indexerServerURL,
   process.env.INDEXER_PORT || ""
 );
-
-// const boxes = [
-//   { name: "YXJjNzJfdG9rZW5VUkk=" },
-//   { name: "aG9sZGVyX2RhdGE22SB/rskTMQiNckaxpV+g/k0ro2i+WpxNdX5No4Od5g==" },
-//   { name: "aG9sZGVyX2RhdGGM1Wvssxtag7AWOrshvUfdYvfb7pdyuzfRLlwy/JrWHA==" },
-//   { name: "bmZ0X2RhdGEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ==" },
-//   { name: "bmZ0X2luZGV4AQ==" },
-//   { name: "bmZ0X2luZGV4Ag==" },
-//   { name: "bmZ0X2luZGV4Aw==" },
-//   { name: "bmZ0X2luZGV4BA==" },
-//   { name: "bmZ0X2luZGV4BQ==" },
-//   { name: "bmZ0X2luZGV4Bg==" },
-//   { name: "bmZ0X2luZGV4Bw==" },
-//   { name: "bmZ0X2luZGV4CA==" },
-//   { name: "bmZ0X2luZGV4CQ==" },
-//   { name: "bmZ0X2luZGV4Cg==" },
-//   { name: "bmZ0X2luZGV4Cw==" },
-//   { name: "bmZ0X2luZGV4DA==" },
-//   { name: "bmZ0X2luZGV4DQ==" },
-// ];
-
-// for await (const box of boxes) {
-//   const { name: boxName } = box;
-//   const boxNameB64 = Buffer.from(boxName, "base64").toString("utf8");
-//   const boxResponse = await indexerClient
-//     .lookupApplicationBoxByIDandName(
-//       421076,
-//       new Uint8Array(Buffer.from(boxName, "base64"))
-//     )
-//     .do();
-//   const boxValue = boxResponse.value;
-//   console.log(boxName, boxNameB64, boxValue);
-// }
-// process.exit(0);
 
 const arc72IndexerURL =
   process.env.ARC72_INDEXER_SERVER || ARC72_INDEXER_SERVER;
@@ -151,7 +180,7 @@ const signSendAndConfirm = async (txns: string[], sk: any) => {
   );
 };
 
-type DeployType = "osarc72-token";
+type DeployType = "vns-registry";
 
 interface DeployOptions {
   type: DeployType;
@@ -169,8 +198,8 @@ export const deploy: any = async (options: DeployOptions) => {
   };
   let Client;
   switch (options.type) {
-    case "osarc72-token": {
-      Client = OSARC72TokenClient;
+    case "vns-registry": {
+      Client = VNSRegistryClient;
       break;
     }
     default: {
@@ -210,376 +239,70 @@ program
     console.log(apid);
   });
 
-// const factory = new Command("factory").description(
-//   "Manage arc200 token factory"
-// );
+// vns
+//   deploy
+//     node main.js deploy --type "vns-registry" --name registry3 --debug
+//   owner can upgrade (test manually because it requires a new version of the contract)
+//     upgrade app
+//       node main.js deploy --type "vns-registry" --name registry3 --debug
+//   non-owner can't upgrade (test manually because it requires a new version of the contract)
+//     upgrade app with other account
+//       node main.js deploy --type "vns-registry" --name registry3 --debug
+//   upgrader can post update
+//     call post update
+//       node main.js vns post-update --apid 7676 --debug --extra-payment 124500
+//   anyone can not post update
+//     call post update with other account
+//       node main.js vns post-update --apid 7676 --debug --extra-payment 124500
+//   ___
+//   get root node owner
+//   get root node resolver
+//   get root node ttl
+//   ___
+//   test views
+//   creator can create subnode from root node
+//   owner can participate
+//   owner can set delegate
+//   owner can revoke delegate
+//   owner can withdraw
+//   creator is owner of root node
+//   root node owner is creator
+//   root node resolver is 0
+//   root node ttl is default ttl
+//   root owner can set record
+//   root owner can set owner
+//   root owner can set subnode owner
+//   root owner can set resolver
+//   root owner can set ttl
+//   upgrader can kill
 
-// interface FactoryCreateOptions {
-//   apid: number;
+const vns = new Command("vns").description("Manage vns registry");
 
-//   debug?: boolean;
-//   simulate?: boolean;
-// }
-
-// export const factoryCreate: any = async (options: FactoryCreateOptions) => {
-//   if (options.debug) {
-//     console.log(options);
-//   }
-//   const ci = new CONTRACT(
-//     Number(options.apid),
-//     algodClient,
-//     indexerClient,
-//     makeSpec(OSARC200TokenFactorySpec.contract.methods),
-//     {
-//       addr,
-//       sk: new Uint8Array(0),
-//     }
-//   );
-//   ci.setPaymentAmount(1152300);
-//   ci.setFee(4000);
-//   const createR = await ci.create();
-//   if (options.debug) {
-//     console.log(createR);
-//   }
-//   if (createR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(createR.txns, sk);
-//     }
-//     return Number(createR.returnValue);
-//   }
-//   return 0;
-// };
-
-// factory
-//   .command("create")
-//   .description("Create a new arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .option("--debug", "Debug the deployment", false)
-//   .option("-r, --simulate", "Simulate the deployment", false)
-//   .action(async (options: FactoryCreateOptions) => {
-//     const apid = await factoryCreate({
-//       ...options,
-//     });
-//     console.log("apid:", apid);
-//   });
-
-const arc72 = new Command("arc72").description("Manage arc72 token");
-
-interface ARC72GlobalStateOptions {
+interface VNSKillApplicationOptions {
   apid: number;
-  lazy?: boolean;
-}
-
-export const arc72GetState: any = async (options: ARC72GlobalStateOptions) => {
-  const globalState = await new OSARC72TokenClient(
-    { resolveBy: "id", id: Number(options.apid) },
-    algodClient
-  ).getGlobalState();
-  if (options.lazy) {
-    return { globalState };
-  }
-  const state = {
-    totalSupply: uint8ArrayToBigInt(
-      globalState.totalSupply?.asByteArray() || new Uint8Array()
-    ).toString(),
-  };
-  return state;
-};
-
-arc72
-  .command("get")
-  .description("Get the state of the arc72 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .action(async (options: ARC72GlobalStateOptions) => {
-    const globalState = await arc72GetState(options);
-    console.log({ globalState });
-    return globalState;
-  });
-
-arc72
-  .command("totalSupply")
-  .description("Get the total supply of the arc72 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .action(async (options: any) => {
-    const ci = new CONTRACT(
-      Number(options.apid),
-      algodClient,
-      indexerClient,
-      makeSpec(OSARC72TokenSpec.contract.methods),
-      {
-        addr: addr,
-        sk: sk,
-      }
-    );
-    const arc72_totalSupplyR = await ci.arc72_totalSupply();
-    if (arc72_totalSupplyR.success) {
-      console.log(arc72_totalSupplyR.returnValue.toString());
-    }
-  });
-
-arc72
-  .command("balanceOf")
-  .description("Get the balance of the arc72 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .requiredOption("-t, --address <string>", "Specify the address")
-  .action(async (options: any) => {
-    const ci = new CONTRACT(
-      Number(options.apid),
-      algodClient,
-      indexerClient,
-      makeSpec(OSARC72TokenSpec.contract.methods),
-      {
-        addr: addr,
-        sk: sk,
-      }
-    );
-    const arc72_balanceOfR = await ci.arc72_balanceOf(options.address);
-    if (arc72_balanceOfR.success) {
-      console.log(arc72_balanceOfR.returnValue.toString());
-    }
-  });
-
-arc72
-  .command("ownerOf")
-  .description("Get the owner of the arc72 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .requiredOption("-t, --token-id <number>", "Specify the token ID")
-  .option("-d, --debug", "Debug the deployment", false)
-  .action(async (options: any) => {
-    if (options.debug) {
-      console.log(options);
-    }
-    const ci = new CONTRACT(
-      Number(options.apid),
-      algodClient,
-      indexerClient,
-      makeSpec(OSARC72TokenSpec.contract.methods),
-      {
-        addr: addr,
-        sk: sk,
-      }
-    );
-    const arc72_ownerOfR = await ci.arc72_ownerOf(BigInt(options.tokenId));
-    if (arc72_ownerOfR.success) {
-      console.log(arc72_ownerOfR.returnValue);
-    }
-  });
-
-arc72
-  .command("tokenURI")
-  .description("Get the token URI of the arc72 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .requiredOption("-t, --token-id <number>", "Specify the token ID")
-  .action(async (options: any) => {
-    const ci = new CONTRACT(
-      Number(options.apid),
-      algodClient,
-      indexerClient,
-      makeSpec(OSARC72TokenSpec.contract.methods),
-      {
-        addr: addr,
-        sk: sk,
-      }
-    );
-    const arc72_tokenURIR = await ci.arc72_tokenURI(BigInt(options.tokenId));
-    console.log(arc72_tokenURIR);
-  });
-
-interface ARC72MintOptions {
-  apid: number;
-  to: string;
-  tokenId: number;
-  metadata: string;
-  transferOwnership?: boolean;
-  simulate?: boolean;
   debug?: boolean;
-}
-
-arc72
-  .command("mint")
-  .description("Mint arc72 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .requiredOption("-t, --to <string>", "Specify the receiver address")
-  .requiredOption("-i, --token-id <number>", "Specify the token ID")
-  .option("-m, --metadata <string>", "Specify the metadata")
-  .option("-r, --transfer-ownership", "Transfer ownership", false)
-  .option("-s, --simulate", "Simulate the mint", false)
-  .option("--debug", "Debug the deployment", false)
-  .action(async (options: ARC72MintOptions) => {
-    if (options.debug) {
-      console.log(options);
-    }
-    const apid = Number(options.apid);
-    const to = options.to;
-    const tokenId = BigInt(options.tokenId);
-    const metadata = options.metadata ?  new Uint8Array(
-      Buffer.from(padStringWithZeroBytes(options.metadata, 256), "utf8")
-    ) : new Uint8Array(256);
-    const ci = new CONTRACT(apid, algodClient, indexerClient, abi.custom, {
-      addr: addr,
-      sk: sk,
-    });
-    const builder = {
-      arc72: new CONTRACT(
-        apid,
-        algodClient,
-        indexerClient,
-        makeSpec(OSARC72TokenSpec.contract.methods),
-        {
-          addr: addr,
-          sk: sk,
-        },
-        true,
-        false,
-        true
-      ),
-      ownable: new CONTRACT(
-        Number(options.tokenId),
-        algodClient,
-        indexerClient,
-        makeSpec(OwnableSpec.contract.methods),
-        {
-          addr: addr,
-          sk: sk,
-        },
-        true,
-        false,
-        true
-      ),
-    };
-    const buildN = [];
-    if (options.transferOwnership) {
-      const txnO = (
-        await builder.ownable.transfer(algosdk.getApplicationAddress(apid))
-      ).obj;
-      console.log({ transfer: txnO });
-      buildN.push({
-        ...txnO,
-      });
-    }
-    const txnO = options.metadata
-      ? (await builder.arc72.mint(to, tokenId, metadata)).obj
-      : (await builder.arc72.mint(to, tokenId)).obj;
-    console.log({ mint: txnO });
-    buildN.push({
-      ...txnO,
-      payment: 336700,
-    });
-    ci.setFee(3000);
-    ci.setEnableGroupResourceSharing(true);
-    ci.setExtraTxns(buildN);
-    const customR = await ci.custom();
-    if (options.debug) {
-      console.log(customR);
-    }
-    if (customR.success) {
-      if (!options.simulate) {
-        await signSendAndConfirm(customR.txns, sk);
-      }
-    }
-  });
-
-arc72
-  .command("burn")
-  .description("Burn arc72 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .requiredOption("-t, --token-id <number>", "Specify the token ID")
-  .option("-s, --simulate", "Simulate the burn", false)
-  .option("--debug", "Debug the deployment", false)
-  .action(async (options: any) => {
-    const ci = new CONTRACT(
-      Number(options.apid),
-      algodClient,
-      indexerClient,
-      makeSpec(OSARC72TokenSpec.contract.methods),
-      {
-        addr: addr,
-        sk: sk,
-      }
-    );
-    ci.setFee(3000);
-    const burnR = await ci.burn(BigInt(options.tokenId));
-    if (options.debug) {
-      console.log(burnR);
-    }
-    if (burnR.success) {
-      if (!options.simulate) {
-        await signSendAndConfirm(burnR.txns, sk);
-      }
-    }
-  });
-
-arc72
-  .command("update")
-  .description("Update the arc72 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .option("-s, --simulate", "Simulate the update", false)
-  .option("--debug", "Debug the deployment", false)
-  .action(async (options) => {
-    const apid = Number(options.apid);
-    const res = await new OSARC72TokenClient(
-      {
-        resolveBy: "id",
-        id: apid,
-        sender: {
-          addr,
-          sk,
-        },
-      },
-      algodClient
-    ).appClient.update();
-  });
-// TODO add post update
-
-arc72
-  .command("post-update")
-  .description("Post update the arc72 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .option("-s, --simulate", "Simulate the post update", false)
-  .option("--debug", "Debug the deployment", false)
-  .action(async (options) => {
-    const ci = new CONTRACT(
-      Number(options.apid),
-      algodClient,
-      indexerClient,
-      makeSpec(OSARC72TokenSpec.contract.methods),
-      {
-        addr: addr,
-        sk: sk,
-      }
-    );
-    const postUpdateR = await ci.post_update();
-    if (options.debug) {
-      console.log(postUpdateR);
-    }
-    if (postUpdateR.success) {
-      if (!options.simulate) {
-        await signSendAndConfirm(postUpdateR.txns, sk);
-      }
-    }
-  });
-
-interface ARC72KillOptions {
-  apid: number;
+  delete?: boolean;
   simulate?: boolean;
-  debug?: boolean;
 }
-
-export const arc72Kill: any = async (options: ARC72KillOptions) => {
+export const killApplication: any = async (
+  options: VNSKillApplicationOptions
+) => {
   const ci = new CONTRACT(
     Number(options.apid),
     algodClient,
     indexerClient,
-    makeSpec(OSARC200TokenSpec.contract.methods),
+    makeSpec(VNSRegistrySpec.contract.methods),
     {
       addr: addr,
       sk: sk,
     }
   );
-  ci.setPaymentAmount(1e6);
+  ci.setPaymentAmount(101000);
   ci.setFee(3000);
-  ci.setOnComplete(5); // deleteApplicationOC
-  const killR = await ci.kill();
+  if (options.delete) {
+    ci.setOnComplete(OnApplicationComplete.DeleteApplicationOC);
+  }
+  const killR = await ci.killApplication();
   if (options.debug) {
     console.log(killR);
   }
@@ -592,92 +315,1017 @@ export const arc72Kill: any = async (options: ARC72KillOptions) => {
   return false;
 };
 
-arc72
+vns
   .command("kill")
-  .description("Kill the arc200 token")
-  .requiredOption("-a, --apid <number>", "Specify the application ID")
-  .option("-s, --simulate", "Simulate the kill", false)
+  .description("Kill the vns registry")
   .option("--debug", "Debug the deployment", false)
-  .action(async (options) => {
-    const success = await arc72Kill(options);
-    console.log("Kill success:", success);
-  });
-
-// ----------------------------
-
-function numberToByteArray(number: number, byteLength = 1) {
-  if (number < 0 || number >= Math.pow(256, byteLength)) {
-    throw new RangeError(
-      `Number ${number} cannot be represented in ${byteLength} bytes.`
+  .option("-d, --delete", "Delete the application", false)
+  .option("-s, --simulate", "Simulate the kill", false)
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .action(async (options: VNSKillApplicationOptions) => {
+    const ci = new CONTRACT(
+      Number(options.apid),
+      algodClient,
+      indexerClient,
+      makeSpec(VNSRegistrySpec.contract.methods),
+      {
+        addr: addr,
+        sk: sk,
+      }
     );
-  }
-
-  const byteArray = new Uint8Array(byteLength);
-  for (let i = byteLength - 1; i >= 0; i--) {
-    byteArray[i] = number & 0xff;
-    number = number >> 8;
-  }
-
-  return byteArray;
-}
-
-const arc72Generate = new Command("generate").description(
-  "ARC72 generate utility"
-);
-
-arc72Generate
-  .command("generate-royalty-b64")
-  .description("Generate royalty b64")
-  .requiredOption("-r, --royalty-points <number>", "Specify the royalty points")
-  .requiredOption(
-    "-c --creator1-points <number>",
-    "Specify the creator1 points"
-  )
-  .requiredOption(
-    "-d --creator2-points <number>",
-    "Specify the creator2 points"
-  )
-  .requiredOption(
-    "-e --creator3-points <number>",
-    "Specify the creator3 points"
-  )
-  .requiredOption(
-    "-f --creator1-address <number>",
-    "Specify the creator1 address"
-  )
-  .requiredOption(
-    "-g --creator2-address <number>",
-    "Specify the creator2 address"
-  )
-  .requiredOption(
-    "-h --creator3-address <number>",
-    "Specify the creator3 address"
-  )
-  .action(async (options: any) => {
-    const royaltyPoints = Number(options.royaltyPoints);
-    const royaltyPointsBytes = numberToByteArray(royaltyPoints, 2);
-    const creator1Points = Number(options.creator1Points);
-    const creator1PointsBytes = numberToByteArray(creator1Points, 2);
-    const creator2Points = Number(options.creator2Points);
-    const creator2PointsBytes = numberToByteArray(creator2Points, 2);
-    const creator3Points = Number(options.creator3Points);
-    const creator3PointsBytes = numberToByteArray(creator3Points, 2);
-    const creator1Address = options.creator1Address;
-    const creator2Address = options.creator2Address;
-    const creator3Address = options.creator3Address;
-    const royalty = [
-      ...royaltyPointsBytes,
-      ...creator1PointsBytes,
-      ...creator2PointsBytes,
-      ...creator3PointsBytes,
-      ...new Uint8Array(algosdk.decodeAddress(creator1Address).publicKey),
-      ...new Uint8Array(algosdk.decodeAddress(creator2Address).publicKey),
-      ...new Uint8Array(algosdk.decodeAddress(creator3Address).publicKey),
-    ];
-    console.log(Buffer.from(royalty).toString("base64"));
+    ci.setPaymentAmount(101000);
+    ci.setFee(3000);
+    if (options.delete) {
+      ci.setOnComplete(OnApplicationComplete.DeleteApplicationOC);
+    }
+    const killR = await ci.killApplication();
+    if (options.debug) {
+      console.log(killR);
+    }
+    if (killR.success) {
+      if (!options.simulate) {
+        await signSendAndConfirm(killR.txns, sk);
+      }
+    }
   });
 
-arc72.addCommand(arc72Generate);
+interface VNSKillNodeOptions {
+  apid: number;
+  node: string;
+  debug?: boolean;
+  simulate?: boolean;
+  sender?: string;
+  sk?: Uint8Array;
+}
+export const killNode: any = async (options: VNSKillNodeOptions) => {
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: options.sender || addr,
+      sk: options.sk || sk,
+    }
+  );
+  const killNodeR = await ci.killNode(namehash(options.node));
+  if (options.debug) {
+    console.log(killNodeR);
+  }
+  if (killNodeR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(killNodeR.txns, sk);
+    }
+    return true;
+  }
+  return false;
+};
+vns
+  .command("kill-node")
+  .description("Kill a node from the vns registry")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .option("-n, --node <string>", "Specify the node")
+  .option("--debug", "Debug the deployment", false)
+  .action(killNode);
+
+interface VNSKillOperatorOptions {
+  apid: number;
+  operator: string;
+  owner: string;
+  debug?: boolean;
+  simulate?: boolean;
+}
+export const killOperator: any = async (options: VNSKillOperatorOptions) => {
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: addr,
+      sk: sk,
+    }
+  );
+  const killOperatorR = await ci.killOperator(options.operator, options.owner);
+  if (options.debug) {
+    console.log(killOperatorR);
+  }
+  if (killOperatorR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(killOperatorR.txns, sk);
+    }
+    return true;
+  }
+  return false;
+};
+
+interface VNSDeleteBoxOptions {
+  apid: number;
+  key: string;
+  debug?: boolean;
+  simulate?: boolean;
+}
+export const deleteBox: any = async (options: VNSDeleteBoxOptions) => {
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: addr,
+      sk: sk,
+    }
+  );
+  const deleteBoxR = await ci.deleteBox(
+    new Uint8Array(Buffer.from(options.key, "base64"))
+  );
+  if (options.debug) {
+    console.log(deleteBoxR);
+  }
+  if (deleteBoxR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(deleteBoxR.txns, sk);
+    }
+    return true;
+  }
+  return false;
+};
+vns
+  .command("delete-box")
+  .description("Delete a box from the vns registry")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .requiredOption("-k, --key <string>", "Specify the key")
+  .option("--debug", "Debug the deployment", false)
+  .action(deleteBox);
+
+interface VNSPostUpdateOptions {
+  apid: number;
+  debug?: boolean;
+  simulate?: boolean;
+  extraPayment?: number;
+}
+export const postUpdate: any = async (options: VNSPostUpdateOptions) => {
+  if (options.debug) {
+    console.log(options);
+  }
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: addr,
+      sk: sk,
+    }
+  );
+  if (options.extraPayment) {
+    const amountBI = BigInt(options.extraPayment);
+    ci.setPaymentAmount(Number(amountBI));
+  }
+  const postUpdateR = await ci.post_update();
+  if (options.debug) {
+    console.log(postUpdateR);
+  }
+  if (postUpdateR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(postUpdateR.txns, sk);
+    }
+    return true;
+  }
+  return false;
+};
+vns
+  .command("post-update")
+  .description("Post update the arc72 token")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .option("-s, --simulate", "Simulate the post update", false)
+  .option("--debug", "Debug the deployment", false)
+  .option("-e, --extra-payment <number>", "Specify the extra payment", false)
+  .action(postUpdate);
+
+interface VNSOwnerOfOptions {
+  apid: number;
+  node?: string;
+  nodeBytes?: Uint8Array;
+  debug?: boolean;
+}
+export const ownerOf: any = async (options: VNSOwnerOfOptions) => {
+  if (options.debug) {
+    console.log(options);
+  }
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: addr,
+      sk: sk,
+    }
+  );
+  const node = namehash(options?.node || "");
+  const ownerOfR = await ci.ownerOf(node);
+  if (options.debug) {
+    console.log(ownerOfR);
+  }
+  return ownerOfR.returnValue;
+};
+vns
+  .command("ownerOf")
+  .description("Get the owner of the arc72 token")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .option("-t, --node <string>", "Specify the node")
+  .option("-d, --debug", "Debug the deployment", false)
+  .action(ownerOf);
+
+interface VNSResolverOptions {
+  apid: number;
+  node?: string;
+  debug?: boolean;
+}
+export const resolver: any = async (options: VNSResolverOptions) => {
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: addr,
+      sk: sk,
+    }
+  );
+  const resolverR = await ci.resolver(namehash(options?.node || ""));
+  if (options.debug) {
+    console.log(resolverR);
+  }
+  return resolverR.returnValue;
+};
+vns
+  .command("resolver")
+  .description("Get the resolver of the vns registry")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .option("-t, --node <string>", "Specify the node")
+  .option("-d, --debug", "Debug the deployment", false)
+  .action(resolver);
+
+interface VNSTTLOptions {
+  apid: number;
+  node?: string;
+  debug?: boolean;
+}
+export const ttl: any = async (options: VNSTTLOptions) => {
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: addr,
+      sk: sk,
+    }
+  );
+  const ttlR = await ci.ttl(namehash(options?.node || ""));
+  if (options.debug) {
+    console.log(ttlR);
+  }
+  return ttlR.returnValue;
+};
+vns
+  .command("ttl")
+  .description("Get the ttl of the vns registry")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .option("-t, --node <string>", "Specify the node")
+  .option("-d, --debug", "Debug the deployment", false)
+  .action(ttl);
+
+interface VNSSetResolverOptions {
+  apid: number;
+  node: string;
+  resolver: number;
+  debug?: boolean;
+  simulate?: boolean;
+  sender?: string;
+  sk?: Uint8Array;
+}
+export const setResolver: any = async (options: VNSSetResolverOptions) => {
+  const address = options.sender || addr;
+  const secretKey = options.sk || sk;
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: address,
+      sk: secretKey,
+    }
+  );
+  const setResolverR = await ci.setResolver(
+    namehash(options.node),
+    options.resolver
+  );
+  if (options.debug) {
+    console.log(setResolverR);
+  }
+  if (setResolverR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(setResolverR.txns, secretKey);
+    }
+    return true;
+  }
+  return false;
+};
+vns
+  .command("set-resolver")
+  .description("Set the resolver of the vns registry")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .action(setResolver);
+
+interface VNSSetTTLOptions {
+  apid: number;
+  node: string;
+  ttl: number;
+  debug?: boolean;
+  simulate?: boolean;
+  sender?: string;
+  sk?: Uint8Array;
+}
+export const setTTL: any = async (options: VNSSetTTLOptions) => {
+  const address = options.sender || addr;
+  const secretKey = options.sk || sk;
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: address,
+      sk: secretKey,
+    }
+  );
+  const setTTLR = await ci.setTTL(namehash(options.node), options.ttl);
+  if (options.debug) {
+    console.log(setTTLR);
+  }
+  if (setTTLR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(setTTLR.txns, secretKey);
+    }
+    return true;
+  }
+  return false;
+};
+vns
+  .command("set-ttl")
+  .description("Set the ttl of the vns registry")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .requiredOption("-t, --ttl <number>", "Specify the ttl")
+  .option("-s, --simulate", "Simulate the set ttl", false)
+  .option("-d, --debug", "Debug the deployment", false)
+  .action(setTTL);
+
+interface VNSSetRecordOptions {
+  apid: number;
+  node: string;
+  owner: string;
+  resolver: number;
+  ttl: number;
+  debug?: boolean;
+  simulate?: boolean;
+}
+export const setRecord: any = async (options: VNSSetRecordOptions) => {
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: addr,
+      sk: sk,
+    }
+  );
+  const setRecordR = await ci.setRecord(
+    namehash(options.node),
+    options.owner,
+    options.resolver,
+    options.ttl
+  );
+  if (options.debug) {
+    console.log(setRecordR);
+  }
+  if (setRecordR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(setRecordR.txns, sk);
+    }
+    return true;
+  }
+  return false;
+};
+vns
+  .command("set-record")
+  .description("Set the record of the vns registry")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .requiredOption("-n, --node <string>", "Specify the node")
+  .requiredOption("-o, --owner <string>", "Specify the owner")
+  .requiredOption("-r, --resolver <number>", "Specify the resolver")
+  .requiredOption("-t, --ttl <number>", "Specify the ttl")
+  .option("-s, --simulate", "Simulate the set record", false)
+  .option("-d, --debug", "Debug the deployment", false)
+  .action(setRecord);
+
+interface VNSSetSubnodeOwnerOptions {
+  apid: number;
+  sender?: string;
+  sk?: Uint8Array;
+  node: string;
+  label: string;
+  owner: string;
+  debug?: boolean;
+  simulate?: boolean;
+  extraPayment?: number;
+}
+export const setSubnodeOwner: any = async (
+  options: VNSSetSubnodeOwnerOptions
+) => {
+  const address = options.sender || addr;
+  const secretKey = options.sk || sk;
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: address,
+      sk: secretKey,
+    }
+  );
+  if (options.extraPayment) {
+    const amountBI = BigInt(options.extraPayment);
+    ci.setPaymentAmount(Number(amountBI));
+  }
+  const setSubnodeOwnerR = await ci.setSubnodeOwner(
+    namehash(options.node),
+    hash(options.label),
+    options.owner
+  );
+  if (options.debug) {
+    console.log(setSubnodeOwnerR);
+  }
+  if (setSubnodeOwnerR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(setSubnodeOwnerR.txns, secretKey);
+    }
+    return setSubnodeOwnerR.returnValue;
+  }
+  return new Uint8Array(32);
+};
+vns
+  .command("set-subnode-owner")
+  .description("Set the subnode owner of the vns registry")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .requiredOption("-n, --node <string>", "Specify the node")
+  .requiredOption("-l, --label <string>", "Specify the label")
+  .requiredOption("-o, --owner <string>", "Specify the owner")
+  .option("-s, --simulate", "Simulate the set subnode owner", false)
+  .option("-d, --debug", "Debug the deployment", false)
+  .action(setSubnodeOwner);
+
+interface VNSSetOwnerOptions {
+  apid: number;
+  node: string;
+  owner: string;
+  sender?: string;
+  sk?: Uint8Array;
+  debug?: boolean;
+  simulate?: boolean;
+}
+export const setOwner: any = async (options: VNSSetOwnerOptions) => {
+  const address = options.sender || addr;
+  const secretKey = options.sk || sk;
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: address,
+      sk: secretKey,
+    }
+  );
+  const setOwnerR = await ci.setOwner(namehash(options.node), options.owner);
+  if (options.debug) {
+    console.log(setOwnerR);
+  }
+  if (setOwnerR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(setOwnerR.txns, secretKey);
+    }
+    return true;
+  }
+  return false;
+};
+vns
+  .command("set-owner")
+  .description("Set the owner of the vns registry")
+  .requiredOption("-a, --apid <number>", "Specify the application ID")
+  .action(setOwner);
+
+interface VNSSetApprovalForAllOptions {
+  apid: number;
+  operator: string;
+  approved: boolean;
+  sender?: string;
+  sk?: Uint8Array;
+  debug?: boolean;
+  simulate?: boolean;
+}
+export const setApprovalForAll: any = async (
+  options: VNSSetApprovalForAllOptions
+) => {
+  const address = options.sender || addr;
+  const secretKey = options.sk || sk;
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: address,
+      sk: secretKey,
+    }
+  );
+  const setApprovalForAllR = await ci.setApprovalForAll(
+    options.operator,
+    options.approved
+  );
+  if (options.debug) {
+    console.log(setApprovalForAllR);
+  }
+  if (setApprovalForAllR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(setApprovalForAllR.txns, secretKey);
+    }
+    return true;
+  }
+  return false;
+};
+vns
+  .command("set-approval-for-all")
+  .description("Set the approval for all of the arc72 token")
+  .action(setApprovalForAll);
+
+interface VNSIsApprovedForAllOptions {
+  apid: number;
+  operator: string;
+  owner: string;
+  debug?: boolean;
+}
+export const isApprovedForAll: any = async (
+  options: VNSIsApprovedForAllOptions
+) => {
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrySpec.contract.methods),
+    {
+      addr: addr,
+      sk: sk,
+    }
+  );
+  const isApprovedForAllR = await ci.isApprovedForAll(
+    options.owner,
+    options.operator
+  );
+  if (options.debug) {
+    console.log(isApprovedForAllR);
+  }
+  return isApprovedForAllR.returnValue;
+};
+vns
+  .command("is-approved-for-all")
+  .description("Check if the operator is approved for all of the vns registry")
+  .action(isApprovedForAll);
+
+// ------------------------------------------------------------------------------------------------
+
+// const arc72 = new Command("arc72").description("Manage arc72 token");
+
+// interface ARC72GlobalStateOptions {
+//   apid: number;
+//   lazy?: boolean;
+// }
+
+// export const arc72GetState: any = async (options: ARC72GlobalStateOptions) => {
+//   const globalState = await new OSARC72TokenClient(
+//     { resolveBy: "id", id: Number(options.apid) },
+//     algodClient
+//   ).getGlobalState();
+//   if (options.lazy) {
+//     return { globalState };
+//   }
+//   const state = {
+//     totalSupply: uint8ArrayToBigInt(
+//       globalState.totalSupply?.asByteArray() || new Uint8Array()
+//     ).toString(),
+//   };
+//   return state;
+// };
+
+// arc72
+//   .command("get")
+//   .description("Get the state of the arc72 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .action(async (options: ARC72GlobalStateOptions) => {
+//     const globalState = await arc72GetState(options);
+//     console.log({ globalState });
+//     return globalState;
+//   });
+
+// arc72
+//   .command("totalSupply")
+//   .description("Get the total supply of the arc72 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .action(async (options: any) => {
+//     const ci = new CONTRACT(
+//       Number(options.apid),
+//       algodClient,
+//       indexerClient,
+//       makeSpec(OSARC72TokenSpec.contract.methods),
+//       {
+//         addr: addr,
+//         sk: sk,
+//       }
+//     );
+//     const arc72_totalSupplyR = await ci.arc72_totalSupply();
+//     if (arc72_totalSupplyR.success) {
+//       console.log(arc72_totalSupplyR.returnValue.toString());
+//     }
+//   });
+
+// arc72
+//   .command("balanceOf")
+//   .description("Get the balance of the arc72 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .requiredOption("-t, --address <string>", "Specify the address")
+//   .action(async (options: any) => {
+//     const ci = new CONTRACT(
+//       Number(options.apid),
+//       algodClient,
+//       indexerClient,
+//       makeSpec(OSARC72TokenSpec.contract.methods),
+//       {
+//         addr: addr,
+//         sk: sk,
+//       }
+//     );
+//     const arc72_balanceOfR = await ci.arc72_balanceOf(options.address);
+//     if (arc72_balanceOfR.success) {
+//       console.log(arc72_balanceOfR.returnValue.toString());
+//     }
+//   });
+
+// arc72
+//   .command("ownerOf")
+//   .description("Get the owner of the arc72 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .requiredOption("-t, --token-id <number>", "Specify the token ID")
+//   .option("-d, --debug", "Debug the deployment", false)
+//   .action(async (options: any) => {
+//     if (options.debug) {
+//       console.log(options);
+//     }
+//     const ci = new CONTRACT(
+//       Number(options.apid),
+//       algodClient,
+//       indexerClient,
+//       makeSpec(OSARC72TokenSpec.contract.methods),
+//       {
+//         addr: addr,
+//         sk: sk,
+//       }
+//     );
+//     const arc72_ownerOfR = await ci.arc72_ownerOf(BigInt(options.tokenId));
+//     if (arc72_ownerOfR.success) {
+//       console.log(arc72_ownerOfR.returnValue);
+//     }
+//   });
+
+// arc72
+//   .command("tokenURI")
+//   .description("Get the token URI of the arc72 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .requiredOption("-t, --token-id <number>", "Specify the token ID")
+//   .action(async (options: any) => {
+//     const ci = new CONTRACT(
+//       Number(options.apid),
+//       algodClient,
+//       indexerClient,
+//       makeSpec(OSARC72TokenSpec.contract.methods),
+//       {
+//         addr: addr,
+//         sk: sk,
+//       }
+//     );
+//     const arc72_tokenURIR = await ci.arc72_tokenURI(BigInt(options.tokenId));
+//     console.log(arc72_tokenURIR);
+//   });
+
+// interface ARC72MintOptions {
+//   apid: number;
+//   to: string;
+//   tokenId: number;
+//   metadata: string;
+//   transferOwnership?: boolean;
+//   simulate?: boolean;
+//   debug?: boolean;
+// }
+
+// arc72
+//   .command("mint")
+//   .description("Mint arc72 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .requiredOption("-t, --to <string>", "Specify the receiver address")
+//   .requiredOption("-i, --token-id <number>", "Specify the token ID")
+//   .option("-m, --metadata <string>", "Specify the metadata")
+//   .option("-r, --transfer-ownership", "Transfer ownership", false)
+//   .option("-s, --simulate", "Simulate the mint", false)
+//   .option("--debug", "Debug the deployment", false)
+//   .action(async (options: ARC72MintOptions) => {
+//     if (options.debug) {
+//       console.log(options);
+//     }
+//     const apid = Number(options.apid);
+//     const to = options.to;
+//     const tokenId = BigInt(options.tokenId);
+//     const metadata = options.metadata
+//       ? new Uint8Array(
+//           Buffer.from(padStringWithZeroBytes(options.metadata, 256), "utf8")
+//         )
+//       : new Uint8Array(256);
+//     const ci = new CONTRACT(apid, algodClient, indexerClient, abi.custom, {
+//       addr: addr,
+//       sk: sk,
+//     });
+//     const builder = {
+//       arc72: new CONTRACT(
+//         apid,
+//         algodClient,
+//         indexerClient,
+//         makeSpec(OSARC72TokenSpec.contract.methods),
+//         {
+//           addr: addr,
+//           sk: sk,
+//         },
+//         true,
+//         false,
+//         true
+//       ),
+//       ownable: new CONTRACT(
+//         Number(options.tokenId),
+//         algodClient,
+//         indexerClient,
+//         makeSpec(OwnableSpec.contract.methods),
+//         {
+//           addr: addr,
+//           sk: sk,
+//         },
+//         true,
+//         false,
+//         true
+//       ),
+//     };
+//     const buildN = [];
+//     if (options.transferOwnership) {
+//       const txnO = (
+//         await builder.ownable.transfer(algosdk.getApplicationAddress(apid))
+//       ).obj;
+//       console.log({ transfer: txnO });
+//       buildN.push({
+//         ...txnO,
+//       });
+//     }
+//     const txnO = options.metadata
+//       ? (await builder.arc72.mint(to, tokenId, metadata)).obj
+//       : (await builder.arc72.mint(to, tokenId)).obj;
+//     console.log({ mint: txnO });
+//     buildN.push({
+//       ...txnO,
+//       payment: 336700,
+//     });
+//     ci.setFee(3000);
+//     ci.setEnableGroupResourceSharing(true);
+//     ci.setExtraTxns(buildN);
+//     const customR = await ci.custom();
+//     if (options.debug) {
+//       console.log(customR);
+//     }
+//     if (customR.success) {
+//       if (!options.simulate) {
+//         await signSendAndConfirm(customR.txns, sk);
+//       }
+//     }
+//   });
+
+// arc72
+//   .command("burn")
+//   .description("Burn arc72 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .requiredOption("-t, --token-id <number>", "Specify the token ID")
+//   .option("-s, --simulate", "Simulate the burn", false)
+//   .option("--debug", "Debug the deployment", false)
+//   .action(async (options: any) => {
+//     const ci = new CONTRACT(
+//       Number(options.apid),
+//       algodClient,
+//       indexerClient,
+//       makeSpec(OSARC72TokenSpec.contract.methods),
+//       {
+//         addr: addr,
+//         sk: sk,
+//       }
+//     );
+//     ci.setFee(3000);
+//     const burnR = await ci.burn(BigInt(options.tokenId));
+//     if (options.debug) {
+//       console.log(burnR);
+//     }
+//     if (burnR.success) {
+//       if (!options.simulate) {
+//         await signSendAndConfirm(burnR.txns, sk);
+//       }
+//     }
+//   });
+
+// arc72
+//   .command("update")
+//   .description("Update the arc72 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .option("-s, --simulate", "Simulate the update", false)
+//   .option("--debug", "Debug the deployment", false)
+//   .action(async (options) => {
+//     const apid = Number(options.apid);
+//     const res = await new OSARC72TokenClient(
+//       {
+//         resolveBy: "id",
+//         id: apid,
+//         sender: {
+//           addr,
+//           sk,
+//         },
+//       },
+//       algodClient
+//     ).appClient.update();
+//   });
+// // TODO add post update
+
+// arc72
+//   .command("post-update")
+//   .description("Post update the arc72 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .option("-s, --simulate", "Simulate the post update", false)
+//   .option("--debug", "Debug the deployment", false)
+//   .action(async (options) => {
+//     const ci = new CONTRACT(
+//       Number(options.apid),
+//       algodClient,
+//       indexerClient,
+//       makeSpec(OSARC72TokenSpec.contract.methods),
+//       {
+//         addr: addr,
+//         sk: sk,
+//       }
+//     );
+//     const postUpdateR = await ci.post_update();
+//     if (options.debug) {
+//       console.log(postUpdateR);
+//     }
+//     if (postUpdateR.success) {
+//       if (!options.simulate) {
+//         await signSendAndConfirm(postUpdateR.txns, sk);
+//       }
+//     }
+//   });
+
+// interface ARC72KillOptions {
+//   apid: number;
+//   simulate?: boolean;
+//   debug?: boolean;
+// }
+
+// export const arc72Kill: any = async (options: ARC72KillOptions) => {
+//   const ci = new CONTRACT(
+//     Number(options.apid),
+//     algodClient,
+//     indexerClient,
+//     makeSpec(OSARC200TokenSpec.contract.methods),
+//     {
+//       addr: addr,
+//       sk: sk,
+//     }
+//   );
+//   ci.setPaymentAmount(1e6);
+//   ci.setFee(3000);
+//   ci.setOnComplete(5); // deleteApplicationOC
+//   const killR = await ci.kill();
+//   if (options.debug) {
+//     console.log(killR);
+//   }
+//   if (killR.success) {
+//     if (!options.simulate) {
+//       await signSendAndConfirm(killR.txns, sk);
+//     }
+//     return true;
+//   }
+//   return false;
+// };
+
+// arc72
+//   .command("kill")
+//   .description("Kill the arc200 token")
+//   .requiredOption("-a, --apid <number>", "Specify the application ID")
+//   .option("-s, --simulate", "Simulate the kill", false)
+//   .option("--debug", "Debug the deployment", false)
+//   .action(async (options) => {
+//     const success = await arc72Kill(options);
+//     console.log("Kill success:", success);
+//   });
+
+// // ----------------------------
+
+// function numberToByteArray(number: number, byteLength = 1) {
+//   if (number < 0 || number >= Math.pow(256, byteLength)) {
+//     throw new RangeError(
+//       `Number ${number} cannot be represented in ${byteLength} bytes.`
+//     );
+//   }
+
+//   const byteArray = new Uint8Array(byteLength);
+//   for (let i = byteLength - 1; i >= 0; i--) {
+//     byteArray[i] = number & 0xff;
+//     number = number >> 8;
+//   }
+
+//   return byteArray;
+// }
+
+// const arc72Generate = new Command("generate").description(
+//   "ARC72 generate utility"
+// );
+
+// arc72Generate
+//   .command("generate-royalty-b64")
+//   .description("Generate royalty b64")
+//   .requiredOption("-r, --royalty-points <number>", "Specify the royalty points")
+//   .requiredOption(
+//     "-c --creator1-points <number>",
+//     "Specify the creator1 points"
+//   )
+//   .requiredOption(
+//     "-d --creator2-points <number>",
+//     "Specify the creator2 points"
+//   )
+//   .requiredOption(
+//     "-e --creator3-points <number>",
+//     "Specify the creator3 points"
+//   )
+//   .requiredOption(
+//     "-f --creator1-address <number>",
+//     "Specify the creator1 address"
+//   )
+//   .requiredOption(
+//     "-g --creator2-address <number>",
+//     "Specify the creator2 address"
+//   )
+//   .requiredOption(
+//     "-h --creator3-address <number>",
+//     "Specify the creator3 address"
+//   )
+//   .action(async (options: any) => {
+//     const royaltyPoints = Number(options.royaltyPoints);
+//     const royaltyPointsBytes = numberToByteArray(royaltyPoints, 2);
+//     const creator1Points = Number(options.creator1Points);
+//     const creator1PointsBytes = numberToByteArray(creator1Points, 2);
+//     const creator2Points = Number(options.creator2Points);
+//     const creator2PointsBytes = numberToByteArray(creator2Points, 2);
+//     const creator3Points = Number(options.creator3Points);
+//     const creator3PointsBytes = numberToByteArray(creator3Points, 2);
+//     const creator1Address = options.creator1Address;
+//     const creator2Address = options.creator2Address;
+//     const creator3Address = options.creator3Address;
+//     const royalty = [
+//       ...royaltyPointsBytes,
+//       ...creator1PointsBytes,
+//       ...creator2PointsBytes,
+//       ...creator3PointsBytes,
+//       ...new Uint8Array(algosdk.decodeAddress(creator1Address).publicKey),
+//       ...new Uint8Array(algosdk.decodeAddress(creator2Address).publicKey),
+//       ...new Uint8Array(algosdk.decodeAddress(creator3Address).publicKey),
+//     ];
+//     console.log(Buffer.from(royalty).toString("base64"));
+//   });
+
+// arc72.addCommand(arc72Generate);
 
 // const arc200 = new Command("arc200").description("Manage arc200 token");
 
@@ -1580,7 +2228,7 @@ arc72.addCommand(arc72Generate);
 //   .option("t --sender <string>", "Specify the sender")
 //   .action(airdropClose);
 
-program.addCommand(arc72);
+program.addCommand(vns);
 
 //program.addCommand(arc200);
 

@@ -1,11 +1,12 @@
 import typing
 from algopy import (
-    Application,
     ARC4Contract,
+    Application,
     Account,
     BigUInt,
     Box,
     BoxMap,
+    BoxRef,
     Bytes,
     Global,
     OnCompleteAction,
@@ -22,11 +23,13 @@ from utils import require_payment, close_offline_on_delete
 Bytes4: typing.TypeAlias = arc4.StaticArray[arc4.Byte, typing.Literal[4]]
 Bytes8: typing.TypeAlias = arc4.StaticArray[arc4.Byte, typing.Literal[8]]
 Bytes32: typing.TypeAlias = arc4.StaticArray[arc4.Byte, typing.Literal[32]]
+Bytes40: typing.TypeAlias = arc4.StaticArray[arc4.Byte, typing.Literal[40]]
+Bytes48: typing.TypeAlias = arc4.StaticArray[arc4.Byte, typing.Literal[48]]
 Bytes64: typing.TypeAlias = arc4.StaticArray[arc4.Byte, typing.Literal[64]]
 Bytes256: typing.TypeAlias = arc4.StaticArray[arc4.Byte, typing.Literal[256]]
 
 mint_fee = 0
-mint_cost = 336700
+mint_cost = 336700  # TODO update
 
 
 class PartKeyInfo(arc4.Struct):
@@ -391,6 +394,7 @@ class arc72_nft_data(arc4.Struct):
     index: arc4.UInt256
     token_id: arc4.UInt256
     metadata: Bytes256
+    node_name: arc4.DynamicBytes
 
 
 class arc72_holder_data(arc4.Struct):
@@ -751,6 +755,20 @@ class ARC72Token(
     def arc72_approve(self, approved: arc4.Address, tokenId: arc4.UInt256) -> None:
         self._approve(Txn.sender, approved.native, tokenId.native)
 
+    @subroutine
+    def _approve(self, owner: Account, approved: Account, tokenId: BigUInt) -> None:
+        nft = self.nft_data.get(key=tokenId, default=self._invalid_nft_data()).copy()
+        assert nft.owner == owner, "owner must be owner"
+        nft.approved = arc4.Address(approved)
+        self.nft_data[tokenId] = nft.copy()
+        arc4.emit(
+            arc72_Approval(
+                arc4.Address(owner),
+                arc4.Address(approved),
+                arc4.UInt256(tokenId),
+            )
+        )
+
     @arc4.abimethod
     def arc72_setApprovalForAll(
         self, operator: arc4.Address, approved: arc4.Bool
@@ -766,20 +784,6 @@ class ARC72Token(
         self, owner: arc4.Address, operator: arc4.Address
     ) -> arc4.Bool:
         return arc4.Bool(self._isApprovedForAll(owner.native, operator.native))
-
-    @subroutine
-    def _approve(self, owner: Account, approved: Account, tokenId: BigUInt) -> None:
-        nft = self.nft_data.get(key=tokenId, default=self._invalid_nft_data()).copy()
-        assert nft.owner == owner, "owner must be owner"
-        nft.approved = arc4.Address(approved)
-        self.nft_data[tokenId] = nft.copy()
-        arc4.emit(
-            arc72_Approval(
-                arc4.Address(owner),
-                arc4.Address(approved),
-                arc4.UInt256(tokenId),
-            )
-        )
 
     @subroutine
     def _setApprovalForAll(
@@ -862,11 +866,8 @@ class ARC72Token(
             approved=arc4.Address(Global.zero_address),
             index=arc4.UInt256(0),
             token_id=arc4.UInt256(0),
-            metadata=Bytes256.from_bytes(
-                Bytes.from_base64(
-                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                )
-            ),
+            metadata=Bytes256.from_bytes(Bytes()),
+            node_name=arc4.DynamicBytes.from_bytes(String("").bytes),
         )
         return invalid_nft_data
 
@@ -996,11 +997,14 @@ class staking_data(arc4.Struct):
     delegate: arc4.Address
 
 
+## dotNS
+
+
 class OSARC72Token(ARC72Token, Upgradeable, Stakeable):
     def __init__(self) -> None:
         super().__init__()
         # ownable state
-        self.owner = Account()
+        self.owner = Global.creator_address
         # upgradeable state
         self.contract_version = UInt64()
         self.deployment_version = UInt64()
@@ -1014,64 +1018,127 @@ class OSARC72Token(ARC72Token, Upgradeable, Stakeable):
     def mint(
         self,
         to: arc4.Address,
-        tokenId: arc4.UInt256,
-        metadata: Bytes256,
+        nodeId: Bytes256,
+        nodeName: arc4.String,
+        duration: arc4.UInt64,
     ) -> arc4.UInt256:
         """
         Mint a new NFT
         """
-        return arc4.UInt256(self._mint(to.native, tokenId.native, metadata.bytes))
+        return arc4.UInt256(
+            self._mint(to.native, nodeId.bytes, nodeName.native, duration.native)
+        )
 
     @subroutine
-    def _mint(self, to: Account, tokenId: BigUInt, metadata: Bytes) -> BigUInt:
-        # TODO require auth to mint
-        nft_data = self._nft_data(tokenId)
+    def _mint(
+        self, to: Account, nodeId: Bytes, nodeName: String, duration: UInt64
+    ) -> BigUInt:
+
+        assert duration > 0, "duration must be greater than 0"
+        assert duration <= 5, "duration must be less than or equal to 10"
+
+        root_node_id = Bytes256.from_bytes(Bytes()).bytes
+        if nodeId == root_node_id:
+            assert Txn.sender == self.owner, "only owner can mint on root node"
+
+        bigNodeId = BigUInt.from_bytes(nodeId)
+
+        parent_nft_data = self._nft_data(bigNodeId)
+
+        assert parent_nft_data.index != 0, "parent node must exist"
+
+        assert "." not in nodeName, "node name must not contain a dot"
+        assert nodeName.bytes.length > 0, "node name must not be empty"
+
+        if nodeId == root_node_id:
+            name = nodeName + "."
+        else:
+            name = nodeName + "." + String.from_bytes(parent_nft_data.node_name.bytes)
+
+        bigTokenId = arc4.UInt256.from_bytes(op.sha256(name.bytes)).native
+
+        nft_data = self._nft_data(bigTokenId)
+
         assert nft_data.index == 0, "token must not exist"
+
         payment_amount = require_payment(Txn.sender)
-        assert payment_amount >= mint_cost + mint_fee, "payment amount accurate"
-        # TODO transfer mint_fee to treasury
-        index = arc4.UInt256(self._increment_counter()).native # BigUInt to BigUInt(UInt256)
+        mint_price = self._get_price(nodeName, duration)
+        assert (
+            payment_amount >= mint_cost + mint_fee + mint_price
+        ), "payment amount accurate"
+
+        index = arc4.UInt256(
+            self._increment_counter()
+        ).native  # BigUInt to BigUInt(UInt256)
         self._increment_totalSupply()
-        self.nft_index[index] = tokenId
-        self.nft_data[tokenId] = arc72_nft_data(
+        self.nft_index[index] = bigTokenId
+        self.nft_data[bigTokenId] = arc72_nft_data(
             owner=arc4.Address(to),
             approved=arc4.Address(Global.zero_address),
             index=arc4.UInt256(index),
-            token_id=arc4.UInt256(tokenId),
-            metadata=Bytes256.from_bytes(metadata),
+            token_id=arc4.UInt256.from_bytes(bigTokenId.bytes),
+            metadata=Bytes256.from_bytes(Bytes()),
+            node_name=arc4.DynamicBytes.from_bytes(nodeName.bytes),
         )
         self._holder_increment_balance(to)
         arc4.emit(
             arc72_Transfer(
                 arc4.Address(Global.zero_address),
                 arc4.Address(to),
-                arc4.UInt256(tokenId),
+                arc4.UInt256(bigTokenId),
             )
         )
         return index
 
+    @subroutine
+    def _get_price(self, nodeName: String, duration: UInt64) -> BigUInt:
+        """
+        Returns the price of the node
+        """
+        bigDuration = BigUInt(duration)
+        price1Letter = BigUInt(5000000)
+        price2Letter = BigUInt(2500000)
+        price3Letter = BigUInt(1500000)
+        price4Letter = BigUInt(1000000)
+        price5Letter = BigUInt(500000)
+        length = nodeName.bytes.length
+        if length > 5:
+            base_price = price5Letter * bigDuration
+        elif length == 4:
+            base_price = price4Letter * bigDuration
+        elif length == 3:
+            base_price = price3Letter * bigDuration
+        elif length == 2:
+            base_price = price2Letter * bigDuration
+        elif length == 1:
+            base_price = price1Letter * bigDuration
+        else:
+            base_price = BigUInt(1000000000000000000000000000000)
+        return base_price
+
     @arc4.abimethod
-    def burn(self, tokenId: arc4.UInt256) -> None:
+    def burn(self, nodeId: Bytes256) -> None:
         """
         Burn an NFT
         """
-        self._burn(tokenId.native)
+        self._burn(nodeId.bytes)
 
     @subroutine
-    def _burn(self, tokenId: BigUInt) -> None:
-        nft_data = self._nft_data(tokenId)
+    def _burn(self, nodeId: Bytes) -> None:
+        bigNodeId = BigUInt.from_bytes(nodeId)
+        nft_data = self._nft_data(bigNodeId)
         assert nft_data.index != 0, "token exists"
         owner = nft_data.owner
         assert owner == Txn.sender, "sender must be owner"
-        del self.nft_index[BigUInt.from_bytes(self._nft_data(tokenId).index.bytes)]
-        del self.nft_data[tokenId]
+        del self.nft_index[BigUInt.from_bytes(self._nft_data(bigNodeId).index.bytes)]
+        del self.nft_data[bigNodeId]
         self._holder_decrement_balance(owner.native)
         self._decrement_totalSupply()
         arc4.emit(
             arc72_Transfer(
                 owner,
                 arc4.Address(Global.zero_address),
-                arc4.UInt256(tokenId),
+                arc4.UInt256.from_bytes(bigNodeId.bytes),
             )
         )
 
@@ -1094,3 +1161,974 @@ class OSARC72Token(ARC72Token, Upgradeable, Stakeable):
     @subroutine
     def _post_update(self) -> None:
         pass
+
+
+# ENS.sol
+# //SPDX-License-Identifier: MIT
+# pragma solidity >=0.8.4;
+#
+# interface ENS {
+#     // Logged when the owner of a node assigns a new owner to a subnode.
+#     event NewOwner(bytes32 indexed node, bytes32 indexed label, address owner);
+#
+#     // Logged when the owner of a node transfers ownership to a new account.
+#     event Transfer(bytes32 indexed node, address owner);
+#
+#     // Logged when the resolver for a node changes.
+#     event NewResolver(bytes32 indexed node, address resolver);
+#
+#     // Logged when the TTL of a node changes
+#     event NewTTL(bytes32 indexed node, uint64 ttl);
+#
+#     // Logged when an operator is added or removed.
+#     event ApprovalForAll(
+#         address indexed owner,
+#         address indexed operator,
+#         bool approved
+#     );
+#
+#     function setRecord(
+#         bytes32 node,
+#         address owner,
+#         address resolver,
+#         uint64 ttl
+#     ) external;
+#
+#     function setSubnodeRecord(
+#         bytes32 node,
+#         bytes32 label,
+#         address owner,
+#         address resolver,
+#         uint64 ttl
+#     ) external;
+#
+#     function setSubnodeOwner(
+#         bytes32 node,
+#         bytes32 label,
+#         address owner
+#     ) external returns (bytes32);
+#
+#     function setResolver(bytes32 node, address resolver) external;
+#
+#     function setOwner(bytes32 node, address owner) external;
+#
+#     function setTTL(bytes32 node, uint64 ttl) external;
+#
+#     function setApprovalForAll(address operator, bool approved) external;
+#
+#     function owner(bytes32 node) external view returns (address);
+#
+#     function resolver(bytes32 node) external view returns (address);
+#
+#     function ttl(bytes32 node) external view returns (uint64);
+#
+#     function recordExists(bytes32 node) external view returns (bool);
+#
+#     function isApprovedForAll(
+#         address owner,
+#         address operator
+#     ) external view returns (bool);
+# }
+
+# contract ENS {
+#     struct Record {
+#         address owner;
+#         address resolver;
+#         uint64 ttl;
+#     }
+
+#     mapping(bytes32=>Record) records;
+
+#     event NewOwner(bytes32 indexed node, bytes32 indexed label, address owner);
+#     event Transfer(bytes32 indexed node, address owner);
+#     event NewResolver(bytes32 indexed node, address resolver);
+
+#     modifier only_owner(bytes32 node) {
+#         if(records[node].owner != msg.sender) throw;
+#         _
+#     }
+
+#     function ENS(address owner) {
+#         records[0].owner = owner;
+#     }
+
+#     function owner(bytes32 node) constant returns (address) {
+#         return records[node].owner;
+#     }
+
+#     function resolver(bytes32 node) constant returns (address) {
+#         return records[node].resolver;
+#     }
+
+#     function ttl(bytes32 node) constant returns (uint64) {
+#         return records[node].ttl;
+#     }
+
+#     function setOwner(bytes32 node, address owner) only_owner(node) {
+#         Transfer(node, owner);
+#         records[node].owner = owner;
+#     }
+
+#     function setSubnodeOwner(bytes32 node, bytes32 label, address owner) only_owner(node) {
+#         var subnode = sha3(node, label);
+#         NewOwner(node, label, owner);
+#         records[subnode].owner = owner;
+#     }
+
+#     function setResolver(bytes32 node, address resolver) only_owner(node) {
+#         NewResolver(node, resolver);
+#         records[node].resolver = resolver;
+#     }
+
+#     function setTTL(bytes32 node, uint64 ttl) only_owner(node) {
+#         NewTTL(node, ttl);
+#         records[node].ttl = ttl;
+#     }
+# }
+
+# constants
+
+DEFAULT_TTL = 86400  # 1 day
+
+# composite types
+#   Record
+
+
+class Record(arc4.Struct):
+    owner: arc4.Address
+    resolver: arc4.UInt64
+    ttl: arc4.UInt64
+    approved: arc4.Address
+
+
+# Events
+#   NewOwner
+#     Logged when the owner of a node assigns a new owner to a subnode.
+#   Transfer
+#     Logged when the owner of a node transfers ownership to a new account.
+#   NewResolver
+#     Logged when the resolver for a node changes.
+#   NewTTL
+#     Logged when the TTL of a node changes
+#   ApprovalForAll
+#     Logged when an operator is added or removed.
+
+
+class NewOwner(arc4.Struct):
+    node: Bytes32
+    label: Bytes32
+    owner: arc4.Address
+
+
+class Transfer(arc4.Struct):
+    node: Bytes32
+    owner: arc4.Address
+
+
+class NewResolver(arc4.Struct):
+    node: Bytes32
+    resolver: arc4.UInt64
+
+
+class NewTTL(arc4.Struct):
+    node: Bytes32
+    ttl: arc4.UInt64
+
+
+class ApprovalForAll(arc4.Struct):
+    owner: arc4.Address
+    operator: arc4.Address
+    approved: arc4.Bool
+
+
+class Approval(arc4.Struct):
+    owner: arc4.Address
+    approved: arc4.Address
+    node: Bytes32
+
+
+# class arc72_Transfer(arc4.Struct):
+#     sender: arc4.Address
+#     recipient: arc4.Address
+#     tokenId: arc4.UInt256
+#
+# class arc72_Approval(arc4.Struct):
+#     owner: arc4.Address
+#     approved: arc4.Address
+#     tokenId: arc4.UInt256
+#
+# class arc72_ApprovalForAll(arc4.Struct):
+#     owner: arc4.Address
+#     operator: arc4.Address
+#     approved: arc4.Bool
+
+
+#                  _
+# __   ___ __  ___(_) ___
+# \ \ / / '_ \/ __| |/ __|
+#  \ V /| | | \__ \ | (__
+#   \_/ |_| |_|___/_|\___|
+#
+# References:
+# https://github.com/ensdomains/ens-contracts/blob/staging/contracts/registry/ENS.sol
+#
+
+
+class VNSCoreInterface(ARC4Contract):
+
+    @arc4.abimethod
+    def setRecord(
+        self,
+        node: Bytes32,
+        owner: arc4.Address,
+        resolver: arc4.UInt64,
+        ttl: arc4.UInt64,
+    ) -> None:
+        self._setRecord(node.bytes, owner.native, resolver.native, ttl.native)
+
+    @subroutine
+    def _setRecord(
+        self,
+        node: Bytes,
+        owner: Account,
+        resolver: UInt64,
+        ttl: UInt64,
+    ) -> None:
+        """
+        Set the record for a node
+        """
+        pass
+
+    @arc4.abimethod
+    def setSubnodeRecord(
+        self,
+        node: Bytes32,
+        label: Bytes32,
+        owner: arc4.Address,
+        resolver: arc4.UInt64,
+        ttl: arc4.UInt64,
+    ) -> None:
+        self._setSubnodeRecord(
+            node.bytes, label.bytes, owner.native, resolver.native, ttl.native
+        )
+
+    @subroutine
+    def _setSubnodeRecord(
+        self, node: Bytes, label: Bytes, owner: Account, resolver: UInt64, ttl: UInt64
+    ) -> None:
+        """
+        Set the record for a subnode
+        """
+        pass
+
+    @subroutine
+    def setSubnodeOwner(
+        self, node: Bytes32, label: Bytes32, owner: arc4.Address
+    ) -> Bytes32:
+        return Bytes32.from_bytes(
+            self._setSubnodeOwner(node.bytes, label.bytes, owner.native)
+        )
+
+    @subroutine
+    def _setSubnodeOwner(self, node: Bytes, label: Bytes, owner: Account) -> Bytes:
+        """
+        Set the owner of a subnode
+        """
+        return Bytes()
+
+    @subroutine
+    def setResolver(self, node: Bytes32, resolver: arc4.UInt64) -> None:
+        self._setResolver(node.bytes, resolver.native)
+
+    @subroutine
+    def _setResolver(self, node: Bytes, resolver: UInt64) -> None:
+        """/
+        Set the resolver for a node
+        """
+        pass
+
+    @subroutine
+    def setOwner(self, node: Bytes32, owner: arc4.Address) -> None:
+        self._setOwner(node.bytes, owner.native)
+
+    @subroutine
+    def _setOwner(self, node: Bytes, owner: Account) -> None:
+        """
+        Set the owner of a node
+        """
+        pass
+
+    @arc4.abimethod
+    def setTTL(self, node: Bytes32, ttl: arc4.UInt64) -> None:
+        self._setTTL(node.bytes, ttl.native)
+
+    @subroutine
+    def _setTTL(self, node: Bytes, ttl: UInt64) -> None:
+        """
+        Set the TTL for a node
+        """
+        pass
+
+    @arc4.abimethod
+    def setApprovalForAll(self, operator: arc4.Address, approved: arc4.Bool) -> None:
+        self._setApprovalForAll(operator.native, approved.native)
+
+    @subroutine
+    def _setApprovalForAll(self, operator: Account, approved: bool) -> None:
+        """
+        Set the approval for all operator
+        """
+        pass
+
+    @arc4.abimethod
+    def approve(self, to: arc4.Address, node: Bytes32) -> None:
+        """
+        Approve an address for a node
+        """
+        self._approve(to.native, node.bytes)
+
+    @subroutine
+    def _approve(self, to: Account, node: Bytes) -> None:
+        """
+        Approve an address for a node
+        """
+        pass
+
+    @arc4.abimethod
+    def getApproved(self, node: Bytes32) -> arc4.Address:
+        return arc4.Address(self._getApproved(node.bytes))
+
+    @subroutine
+    def _getApproved(self, node: Bytes) -> Account:
+        """
+        Get the approved address for a node
+        """
+        return Global.zero_address
+
+    @arc4.abimethod(readonly=True)
+    def ownerOf(self, node: Bytes32) -> arc4.Address:
+        return arc4.Address(self._ownerOf(node.bytes))
+
+    @subroutine
+    def _ownerOf(self, node: Bytes) -> Account:
+        """
+        Get the owner of a node
+        """
+        return Global.zero_address
+
+    @arc4.abimethod(readonly=True)
+    def resolver(self, node: Bytes32) -> arc4.UInt64:
+        return arc4.UInt64(self._resolver(node.bytes))
+
+    @subroutine
+    def _resolver(self, node: Bytes) -> UInt64:
+        """
+        Get the resolver for a node
+        """
+        return UInt64(0)
+
+    @arc4.abimethod(readonly=True)
+    def ttl(self, node: Bytes32) -> arc4.UInt64:
+        return arc4.UInt64(self._ttl(node.bytes))
+
+    @subroutine
+    def _ttl(self, node: Bytes) -> UInt64:
+        """
+        Get the TTL for a node
+        """
+        return UInt64(0)
+
+    @arc4.abimethod(readonly=True)
+    def recordExists(self, node: Bytes32) -> arc4.Bool:
+        return arc4.Bool(self._recordExists(node.bytes))
+
+    @subroutine
+    def _recordExists(self, node: Bytes) -> bool:
+        """
+        Check if a record exists for a node
+        """
+        return False
+
+    @arc4.abimethod(readonly=True)
+    def isApprovedForAll(
+        self, owner: arc4.Address, operator: arc4.Address
+    ) -> arc4.Bool:
+        """
+        Check if an operator is approved for all
+        """
+        return arc4.Bool(self._isApprovedForAll(owner.native, operator.native))
+
+    @subroutine
+    def _isApprovedForAll(self, owner: Account, operator: Account) -> bool:
+        """
+        Check if an operator is approved for all
+        """
+        return False
+
+
+#                  _
+# __   ___ __  ___(_)_ __ ___
+# \ \ / / '_ \/ __| | '__/ _ \
+#  \ V /| | | \__ \ | | |  __/
+#   \_/ |_| |_|___/_|_|  \___|
+#
+
+
+class VNSRecordInterface(ARC4Contract):
+
+    @subroutine
+    def _record(self, node: Bytes32) -> Record:
+        """
+        Returns the record
+        """
+        return Record(
+            owner=arc4.Address(Global.zero_address),
+            resolver=arc4.UInt64(0),
+            ttl=arc4.UInt64(0),
+            approved=arc4.Address(Global.zero_address),
+        )
+
+    @subroutine
+    def _record_owner(self, node: Bytes32) -> Account:
+        """
+        Returns the owner of a record
+        """
+        return self._record(node).owner.native
+
+    @subroutine
+    def _record_resolver(self, node: Bytes32) -> UInt64:
+        """
+        Returns the resolver of a record
+        """
+        return self._record(node).resolver.native
+
+    @subroutine
+    def _record_ttl(self, node: Bytes32) -> UInt64:
+        """
+        Returns the TTL of a record
+        """
+        return self._record(node).ttl.native
+
+    @subroutine
+    def _record_approved(self, node: Bytes32) -> Account:
+        """
+        Returns the approved address for a record
+        """
+        return self._record(node).approved.native
+
+    @subroutine
+    def _invalid_record(self) -> Record:
+        invalid_record = Record(
+            owner=arc4.Address(Global.zero_address),
+            resolver=arc4.UInt64(0),
+            ttl=arc4.UInt64(0),
+            approved=arc4.Address(Global.zero_address),
+        )
+        return invalid_record
+
+
+# __   ___ __  ___
+# \ \ / / '_ \/ __|
+#  \ V /| | | \__ \
+#   \_/ |_| |_|___/
+#
+# References:
+# https://github.com/ensdomains/ens-contracts/blob/staging/contracts/registry/ENSRegistry.sol
+#
+
+
+class VNS(
+    VNSCoreInterface,
+    VNSRecordInterface,
+    # ARC72TokenCoreInterface,
+    # ARC72TokenMetadataInterface,
+    # ARC72TokenTransferManagementInterface,
+    # ARC72TokenEnumerationInterface,
+    # ARC73SupportsInterface,
+):
+    def __init__(self) -> None:
+        self.records = BoxMap(Bytes32, Record, key_prefix=b"")
+        self.operators = BoxMap(Bytes64, bool, key_prefix=b"")
+
+    # vns extended record methods
+
+    # override
+    @subroutine
+    def _record(self, node: Bytes32) -> Record:
+        """
+        Returns the record
+        """
+        return self.records.get(key=node, default=self._invalid_record())
+
+    # vms operator methods
+
+    @subroutine
+    def _operator(self, operator_key: Bytes64) -> bool:
+        """
+        Returns the operator for a node
+        """
+        return self.operators.get(key=operator_key, default=False)
+
+    # vns access control methods
+
+    #   Permits only the owner of the specified node
+
+    @subroutine
+    def only_owner(self, node: Bytes32) -> None:
+        """
+        Only the owner can call this function
+        """
+        assert self._record_owner(node) == Txn.sender, "sender must be owner"
+
+    #   Permits only the owner of the specified node or approved operator
+
+    @subroutine
+    def authorized(self, node: Bytes32) -> bool:
+        """
+        Check if the sender is authorized to call this function
+        """
+        owner = self._record_owner(node)
+        return (
+            owner == Txn.sender
+            or self._operator(Bytes64.from_bytes(Txn.sender.bytes + owner.bytes))
+            or self._record_approved(node) == Txn.sender
+        )
+
+    # vns core methods
+
+    @arc4.abimethod
+    def setRecord(
+        self,
+        node: Bytes32,
+        owner: arc4.Address,
+        resolver: arc4.UInt64,
+        ttl: arc4.UInt64,
+    ) -> None:
+        self.only_owner(node)
+        self._setRecord(node.bytes, owner.native, resolver.native, ttl.native)
+
+    @subroutine
+    def _setRecord(
+        self, node: Bytes, owner: Account, resolver: UInt64, ttl: UInt64
+    ) -> None:
+        """
+        Set the record for a node
+        """
+        arc4.emit(Transfer(Bytes32.from_bytes(node), arc4.Address(owner)))
+        arc4.emit(NewResolver(Bytes32.from_bytes(node), arc4.UInt64(resolver)))
+        arc4.emit(NewTTL(Bytes32.from_bytes(node), arc4.UInt64(ttl)))
+        record = self._record(Bytes32.from_bytes(node))
+        record.owner = arc4.Address(owner)
+        record.resolver = arc4.UInt64(resolver)
+        record.ttl = arc4.UInt64(ttl)
+        self.records[Bytes32.from_bytes(node)] = record.copy()
+
+    @arc4.abimethod
+    def setSubnodeRecord(
+        self,
+        node: Bytes32,
+        label: Bytes32,
+        owner: arc4.Address,
+        resolver: arc4.UInt64,
+        ttl: arc4.UInt64,
+    ) -> None:
+        """
+        Set the record for a subnode
+        """
+        self.only_owner(node)
+        self._setSubnodeRecord(
+            node.bytes, label.bytes, owner.native, resolver.native, ttl.native
+        )
+
+    @subroutine
+    def _setSubnodeRecord(
+        self, node: Bytes, label: Bytes, owner: Account, resolver: UInt64, ttl: UInt64
+    ) -> None:
+        """
+        Set the record for a subnode
+        """
+        # bytes32 subnode = setSubnodeOwner(node, label, owner);
+        # _setResolverAndTTL(subnode, resolver, ttl);
+        self._setSubnodeOwner(node, label, owner)
+        # here
+
+    # override
+    @arc4.abimethod
+    def setSubnodeOwner(
+        self, node: Bytes32, label: Bytes32, owner: arc4.Address
+    ) -> Bytes32:
+        """
+        Set the owner of a subnode
+        """
+        self.authorized(node)
+        return Bytes32.from_bytes(
+            self._setSubnodeOwner(node.bytes, label.bytes, owner.native)
+        )
+
+    # override
+    @subroutine
+    def _setSubnodeOwner(self, node: Bytes, label: Bytes, owner: Account) -> Bytes:
+        """
+        Set the owner of a subnode
+        """
+        subnode = op.sha256(node + label)
+        arc4.emit(
+            NewOwner(
+                Bytes32.from_bytes(node), Bytes32.from_bytes(label), arc4.Address(owner)
+            )
+        )
+        record = self._record(Bytes32.from_bytes(subnode))
+        record.owner = arc4.Address(owner)
+        self.records[Bytes32.from_bytes(subnode)] = record.copy()
+        return subnode
+
+    # override
+    @arc4.abimethod
+    def setResolver(self, node: Bytes32, resolver: arc4.UInt64) -> None:
+        """
+        Set the resolver for a node
+        """
+        self.authorized(node)
+        self._setResolver(node.bytes, resolver.native)
+
+    # override
+    @subroutine
+    def _setResolver(self, node: Bytes, resolver: UInt64) -> None:
+        """
+        Set the resolver for a node
+        """
+        record = self._record(Bytes32.from_bytes(node))
+        if record.resolver.native != resolver:
+            arc4.emit(NewResolver(Bytes32.from_bytes(node), arc4.UInt64(resolver)))
+            record.resolver = arc4.UInt64(resolver)
+            self.records[Bytes32.from_bytes(node)] = record.copy()
+
+    # override
+    @arc4.abimethod
+    def setOwner(self, node: Bytes32, owner: arc4.Address) -> None:
+        """
+        Set the owner of a node
+        """
+        self.authorized(node)
+        self._setOwner(node.bytes, owner.native)
+
+    # override
+    @subroutine
+    def _setOwner(self, node: Bytes, owner: Account) -> None:
+        """
+        Set the owner of a node
+        """
+        arc4.emit(Transfer(Bytes32.from_bytes(node), arc4.Address(owner)))
+        record = self._record(Bytes32.from_bytes(node))
+        record.owner = arc4.Address(owner)
+        self.records[Bytes32.from_bytes(node)] = record.copy()
+
+    # override
+    @arc4.abimethod
+    def setTTL(self, node: Bytes32, ttl: arc4.UInt64) -> None:
+        """
+        Set the TTL for a node
+        """
+        self.authorized(node)
+        self._setTTL(node.bytes, ttl.native)
+
+    # override
+    @subroutine
+    def _setTTL(self, node: Bytes, ttl: UInt64) -> None:
+        """
+        Set the TTL for a node
+        """
+        record = self._record(Bytes32.from_bytes(node))
+        if record.ttl.native != ttl:
+            arc4.emit(NewTTL(Bytes32.from_bytes(node), arc4.UInt64(ttl)))
+            record.ttl = arc4.UInt64(ttl)
+            self.records[Bytes32.from_bytes(node)] = record.copy()
+
+    # override
+    @subroutine
+    def _setApprovalForAll(self, operator: Account, approved: bool) -> None:
+        """
+        Set the approval for all operator
+        """
+        # TODO emit ApprovalForAll
+        self.operators[Bytes64.from_bytes(operator.bytes + Txn.sender.bytes)] = approved
+
+    # override
+    @subroutine
+    def _approve(self, to: Account, node: Bytes) -> None:
+        """
+        Approve an address for a node
+        """
+        self.only_owner(Bytes32.from_bytes(node))
+        record = self._record(Bytes32.from_bytes(node))
+        record.approved = arc4.Address(to)
+        self.records[Bytes32.from_bytes(node)] = record.copy()
+
+    # override
+    @subroutine
+    def _getApproved(self, node: Bytes) -> Account:
+        """
+        Get the approved address for a node
+        """
+        return self._record_approved(Bytes32.from_bytes(node))
+
+    # override
+    @subroutine
+    def _ownerOf(self, node: Bytes) -> Account:
+        """
+        Get the owner of a node
+        """
+        return self._record_owner(Bytes32.from_bytes(node))
+
+    # override
+    @subroutine
+    def _resolver(self, node: Bytes) -> UInt64:
+        return self._record_resolver(Bytes32.from_bytes(node))
+
+    # override
+    @subroutine
+    def _ttl(self, node: Bytes) -> UInt64:
+        return self._record_ttl(Bytes32.from_bytes(node))
+
+    # override
+    @subroutine
+    def _recordExists(self, node: Bytes) -> bool:
+        return self._record(Bytes32.from_bytes(node)).owner != Global.zero_address
+
+    # override
+    @subroutine
+    def _isApprovedForAll(self, owner: Account, operator: Account) -> bool:
+        return self._operator(Bytes64.from_bytes(operator.bytes + owner.bytes))
+
+    # vns utility methods
+
+    @subroutine
+    def setResolverAndTTL(
+        self, node: Bytes32, resolver: arc4.UInt64, ttl: arc4.UInt64
+    ) -> None:
+        """
+        Set the resolver and TTL for a node
+        """
+        self._setResolver(node.bytes, resolver.native)
+        self._setTTL(node.bytes, ttl.native)
+
+
+class VNSRegistry(VNS, Stakeable, Upgradeable):
+    def __init__(self) -> None:
+        # ownable state (in Stakeable and Upgradeable)
+        self.owner = Global.creator_address
+        # upgradable state
+        self.contract_version = UInt64()
+        self.deployment_version = UInt64()
+        self.updatable = bool(1)
+        self.upgrader = Global.creator_address
+        # stakeable state
+        self.delegate = Account()  # zero address
+        self.stakeable = bool(1)  # 1 (Default unlocked)
+        # records state
+        self.registry_ttl = UInt64(DEFAULT_TTL)
+        self.registry_resolver = UInt64(0)
+
+    @arc4.abimethod
+    def post_update(self) -> None:
+        assert Txn.sender == self.upgrader, "must be upgrader"
+        # initialize root node
+        self.records[
+            Bytes32.from_bytes(
+                Bytes.from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+            )
+        ] = Record(
+            owner=arc4.Address(Global.creator_address),
+            resolver=arc4.UInt64(0),
+            ttl=arc4.UInt64(DEFAULT_TTL),
+            approved=arc4.Address(Global.zero_address),
+        )
+
+    # terminal methods for testing
+
+    @arc4.abimethod(allow_actions=[OnCompleteAction.DeleteApplication])
+    def killApplication(self) -> None:
+        assert Txn.sender == self.upgrader, "must be upgrader"
+        close_offline_on_delete(Txn.sender)
+
+    @arc4.abimethod
+    def killNode(self, node: Bytes32) -> None:
+        assert Txn.sender == self.upgrader, "must be upgrader"
+        del self.records[node]
+
+    @arc4.abimethod
+    def killOperator(self, operator: arc4.Address, owner: arc4.Address) -> None:
+        assert Txn.sender == self.upgrader, "must be upgrader"
+        del self.operators[Bytes64.from_bytes(operator.bytes + owner.bytes)]
+
+    @arc4.abimethod
+    def deleteBox(self, key: Bytes) -> None:
+        assert Txn.sender == self.upgrader, "must be upgrader"
+        box = BoxRef(key=key)
+        box.delete()
+
+    # override
+    @subroutine
+    def _invalid_record(self) -> Record:
+        """
+        Returns invalid record
+        """
+        invalid_record = Record(
+            owner=arc4.Address(Global.zero_address),
+            resolver=arc4.UInt64(self.registry_resolver),
+            ttl=arc4.UInt64(self.registry_ttl),
+            approved=arc4.Address(Global.zero_address),
+        )
+        return invalid_record
+
+
+class VersionChanged(arc4.Struct):
+    node: Bytes32
+    newVersion: arc4.UInt64
+
+
+class VNSVersionableResolverInterface(ARC4Contract):
+    @arc4.abimethod
+    def recordVersions(self, node: Bytes32) -> arc4.UInt64:
+        """
+        Get the version for a node
+        """
+        return arc4.UInt64(self._recordVersions(node.bytes))
+
+    @subroutine
+    def _recordVersions(self, node: Bytes) -> UInt64:
+        """
+        Get the version for a node
+        """
+        return UInt64(0)
+
+
+class VNSBaseResolver(VNSVersionableResolverInterface):
+    def __init__(self) -> None:
+        self.record_versions = BoxMap(Bytes32, UInt64, key_prefix=b"versions_")
+        self.vns = UInt64(0)
+
+    @subroutine
+    def authorized(self, node: Bytes32) -> None:
+        app = Application(self.vns)
+        owner, _txn = arc4.abi_call(VNS.ownerOf, node, app_id=app)
+        assert owner == Txn.sender, "sender must be owner"
+
+    @subroutine
+    def _recordVersions(self, node: Bytes) -> UInt64:
+        return self.record_versions.get(key=Bytes32.from_bytes(node), default=UInt64(0))
+
+    @arc4.abimethod
+    def clearRecords(self, node: Bytes32) -> None:
+        self.authorized(node)
+        newVersion = self._recordVersions(node.bytes) + UInt64(1)
+        arc4.emit(VersionChanged(node, arc4.UInt64(newVersion)))
+        self.record_versions[node] = newVersion
+
+    # supports interface
+
+
+class AddrChanged(arc4.Struct):
+    node: Bytes32
+    addr: arc4.Address
+
+
+class VNSAddrResolverInterface(ARC4Contract):
+    @arc4.abimethod
+    def addr(self, node: Bytes32) -> arc4.Address:
+        """
+        Get the address for a node
+        """
+        return arc4.Address(self._addr(node.bytes))
+
+    @subroutine
+    def _addr(self, node: Bytes) -> Account:
+        """
+        Get the address for a node
+        """
+        return Global.zero_address
+
+
+class VNSAddrResolver(VNSAddrResolverInterface, VNSBaseResolver):
+    def __init__(self) -> None:
+        self.versionable_addrs = BoxMap(Bytes40, Account, key_prefix=b"addrs_")
+
+    @subroutine
+    def _addr(self, node: Bytes) -> Account:
+        record_version_bytes = arc4.UInt64(self._recordVersions(node)).bytes
+        return self.versionable_addrs.get(
+            key=Bytes40.from_bytes(record_version_bytes + node),
+            default=Global.zero_address,
+        )
+
+    @arc4.abimethod
+    def setAddr(self, node: Bytes32, newAddress: arc4.Address) -> None:
+        self.authorized(node)
+        arc4.emit(AddrChanged(node, newAddress))
+        self._setAddr(node.bytes, newAddress.native)
+
+    @subroutine
+    def _setAddr(self, node: Bytes, newAddress: Account) -> None:
+        record_version_bytes = arc4.UInt64(self._recordVersions(node)).bytes
+        self.versionable_addrs[Bytes40.from_bytes(record_version_bytes + node)] = (
+            newAddress
+        )
+
+
+class AddressChanged(arc4.Struct):
+    node: Bytes32
+    coinType: arc4.UInt64  # Application ID
+    newAddress: arc4.Address
+
+
+class VNSAddressResolverInterface(ARC4Contract):
+    @arc4.abimethod
+    def addresss(self, node: Bytes32, coinType: arc4.UInt64) -> arc4.Address:
+        """
+        Get the address for a node
+        """
+        return arc4.Address(self._address(node.bytes, coinType.native))
+
+    @subroutine
+    def _address(self, node: Bytes, coinType: UInt64) -> Account:
+        """
+        Get the address for a node
+        """
+        return Global.zero_address
+
+
+class VNSAddressResolver(VNSAddressResolverInterface, VNSBaseResolver):
+    def __init__(self) -> None:
+        self.versionable_addresses = BoxMap(Bytes48, Account, key_prefix=b"addrs_")
+
+    @subroutine
+    def _address(self, node: Bytes, coinType: UInt64) -> Account:
+        record_version_bytes = arc4.UInt64(self._recordVersions(node)).bytes
+        return self.versionable_addresses.get(
+            key=Bytes48.from_bytes(record_version_bytes + node + op.itob(coinType)),
+            default=Global.zero_address,
+        )
+
+    @arc4.abimethod
+    def setAddress(
+        self, node: Bytes32, coinType: arc4.UInt64, newAddress: arc4.Address
+    ) -> None:
+        self.authorized(node)
+        arc4.emit(AddressChanged(node, coinType, newAddress))
+        self._setAddress(node.bytes, coinType.native, newAddress.native)
+
+    @subroutine
+    def _setAddress(self, node: Bytes, coinType: UInt64, newAddress: Account) -> None:
+        record_version_bytes = arc4.UInt64(self._recordVersions(node)).bytes
+        self.versionable_addresses[
+            Bytes48.from_bytes(record_version_bytes + node + op.itob(coinType))
+        ] = newAddress
+
+
+class VNSPublicResolver(VNSAddrResolver, VNSAddressResolver):
+    def __init__(self) -> None:
+        self.vns = UInt64(0)
+
+    @arc4.abimethod
+    def post_update(self, vns: arc4.UInt64) -> None:
+        self.vns = vns.native

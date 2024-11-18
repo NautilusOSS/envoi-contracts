@@ -4,7 +4,8 @@ arc72-build-image() {
 }
 arc72-build-artifacts() {
   docker run -v $(pwd):/src -v $(pwd)/artifacts:/artifacts algokit-builder && 
-  cp -v artifacts/OSARC72TokenClient.ts ./src/scripts/clients/ 
+  cp -v artifacts/VNSRegistryClient.ts ./src/scripts/clients/ 
+  cp -v artifacts/VNSPublicResolverClient.ts ./src/scripts/clients/ 
 }
 arc72-build-all() {
   arc72-build-image && arc72-build-artifacts
