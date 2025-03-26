@@ -1,18 +1,34 @@
 import { Command } from "commander";
 import { VnsRegistryClient as VNSRegistryClient, APP_SPEC as VNSRegistrySpec, } from "./clients/VNSRegistryClient.js";
+import { APP_SPEC as VNSRSVPSpec, } from "./clients/VNSRSVPClient.js";
+import { VnsPublicResolverClient as VNSPublicResolverClient, APP_SPEC as VNSPublicResolverSpec, } from "./clients/VNSPublicResolverClient.js";
+import { Osarc200TokenClient as OSARC200TokenClient, APP_SPEC as OSARC200TokenSpec, } from "./clients/OSARC200TokenClient.js";
+import { APP_SPEC as OSARC200TokenFactorySpec, } from "./clients/OSARC200TokenFactoryClient.js";
+import { VnsRegistrarClient as VNSRegistrarClient, APP_SPEC as VNSRegistrarSpec, } from "./clients/VNSRegistrarClient.js";
+import { ReverseRegistrarClient as ReverseRegistrarClient, APP_SPEC as ReverseRegistrarSpec, } from "./clients/ReverseRegistrarClient.js";
+import { CollectionRegistrarClient as CollectionRegistrarClient, APP_SPEC as CollectionRegistrarSpec, } from "./clients/CollectionRegistrarClient.js";
+import { StakingRegistrarClient as StakingRegistrarClient, APP_SPEC as StakingRegistrarSpec, } from "./clients/StakingRegistrarClient.js";
 import algosdk, { OnApplicationComplete, } from "algosdk";
-import { CONTRACT } from "ulujs";
+import { CONTRACT, abi } from "ulujs";
 import * as dotenv from "dotenv";
+import BigNumber from "bignumber.js";
+import { readFileSync } from "fs";
 import crypto from "crypto";
 import pkg from "js-sha3";
 const { keccak256 } = pkg;
 dotenv.config({ path: ".env" });
 export const ALGORAND_ZERO_ADDRESS_STRING = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ";
-export const minBalance = 100000;
+export const minBalance = 1000000;
 const extraPages = 1;
 export const extraPageCost = 100000 * (1 + extraPages);
-export const recordBoxCost = 49300; // TODO: check this
-function stripTrailingZeroBytes(str) {
+export const recordBoxCost = 49300;
+// function that takes string and returns a Uint8Array of size 256
+export function stringToUint8Array(str, length) {
+    const bytes = new Uint8Array(length);
+    bytes.set(new Uint8Array(Buffer.from(str, "utf8")), 0);
+    return bytes;
+}
+export function stripTrailingZeroBytes(str) {
     return str.replace(/\0+$/, ""); // Matches one or more '\0' at the end of the string and removes them
 }
 function padStringWithZeroBytes(input, length) {
@@ -30,6 +46,16 @@ function uint8ArrayToBigInt(uint8Array) {
     }
     return result;
 }
+function bigIntToUint8Array(bigInt) {
+    const uint8Array = new Uint8Array(32);
+    let tempBigInt = bigInt;
+    // Find the highest non-zero byte
+    for (let i = 31; i >= 0; i--) {
+        uint8Array[i] = Number(tempBigInt & BigInt(0xff));
+        tempBigInt >>= BigInt(8);
+    }
+    return uint8Array;
+}
 export function bytesToHex(bytes) {
     return bytes.reduce((acc, byte) => acc + byte.toString(16).padStart(2, "0"), "");
 }
@@ -37,10 +63,22 @@ export function bytesToBase64(bytes) {
     return Buffer.from(bytes).toString("base64");
 }
 export function hash(label, algorithm = "sha256") {
-    const labelBytes = Buffer.from(label, "utf8");
+    const labelBytes = typeof label === "string" ? Buffer.from(label, "utf8") : label;
     return algorithm === "keccak256"
         ? new Uint8Array(keccak256.arrayBuffer(labelBytes))
         : new Uint8Array(crypto.createHash(algorithm).update(labelBytes).digest());
+}
+function isAlgorandAddress(address) {
+    // Check if the address length is correct
+    if (address.length !== 58) {
+        return false;
+    }
+    // Check if the address uses valid Base32 characters
+    const base32Regex = /^[A-Z2-7]+$/;
+    if (!base32Regex.test(address)) {
+        return false;
+    }
+    return true;
 }
 export function namehash(name, algorithm = "sha256") {
     if (!name) {
@@ -55,7 +93,12 @@ export function namehash(name, algorithm = "sha256") {
         if (label) {
             // Skip empty labels
             // Hash the label
-            const labelHash = hash(label, algorithm);
+            const isNumber = !isNaN(Number(label));
+            const labelHash = !isAlgorandAddress(label)
+                ? !isNumber
+                    ? hash(label, algorithm)
+                    : hash(bigIntToUint8Array(BigInt(label)), algorithm)
+                : hash(algosdk.decodeAddress(label).publicKey, algorithm);
             // Concatenate current node hash with label hash and hash again
             const combined = new Uint8Array([...node, ...labelHash]);
             node =
@@ -74,7 +117,7 @@ export const acc2 = algosdk.mnemonicToSecretKey(MN2 || "");
 export const { addr: addr2, sk: sk2 } = acc2;
 export const acc3 = algosdk.mnemonicToSecretKey(MN3 || "");
 export const { addr: addr3, sk: sk3 } = acc3;
-export const addressses = {
+export const addresses = {
     deployer: addr,
     owner: addr2,
     registrar: addr3,
@@ -85,15 +128,15 @@ export const sks = {
     registrar: sk3,
 };
 // TESTNET
-const ALGO_SERVER = "https://testnet-api.voi.nodely.io";
-const ALGO_INDEXER_SERVER = "https://testnet-idx.voi.nodely.io";
-const ARC72_INDEXER_SERVER = "https://arc72-idx.nautilus.sh";
+// const ALGO_SERVER = "https://testnet-api.voi.nodely.io";
+// const ALGO_INDEXER_SERVER = "https://testnet-idx.voi.nodely.io";
+// const ARC72_INDEXER_SERVER = "https://arc72-idx.nautilus.sh";
 // MAINNET
-// const ALGO_SERVER = "https://mainnet-api.voi.nodely.dev";
-// const ALGO_INDEXER_SERVER = "https://mainnet-idx.voi.nodely.dev";
-// const ARC72_INDEXER_SERVER = "https://mainnet-idx.nautilus.sh";
+const ALGO_SERVER = "https://mainnet-api.voi.nodely.dev";
+const ALGO_INDEXER_SERVER = "https://mainnet-idx.voi.nodely.dev";
+const ARC72_INDEXER_SERVER = "https://mainnet-idx.nautilus.sh";
 const algodServerURL = process.env.ALGOD_SERVER || ALGO_SERVER;
-const algodClient = new algosdk.Algodv2(process.env.ALGOD_TOKEN || "", algodServerURL, process.env.ALGOD_PORT || "");
+export const algodClient = new algosdk.Algodv2(process.env.ALGOD_TOKEN || "", algodServerURL, process.env.ALGOD_PORT || "");
 const indexerServerURL = process.env.INDEXER_SERVER || ALGO_INDEXER_SERVER;
 const indexerClient = new algosdk.Indexer(process.env.INDEXER_TOKEN || "", indexerServerURL, process.env.INDEXER_PORT || "");
 const arc72IndexerURL = process.env.ARC72_INDEXER_SERVER || ARC72_INDEXER_SERVER;
@@ -125,6 +168,34 @@ export const deploy = async (options) => {
     switch (options.type) {
         case "vns-registry": {
             Client = VNSRegistryClient;
+            break;
+        }
+        // case "vns-rsvp": {
+        //   Client = VNSRSVPClient;
+        //   break;
+        // }
+        case "vns-resolver": {
+            Client = VNSPublicResolverClient;
+            break;
+        }
+        case "vns-registrar": {
+            Client = VNSRegistrarClient;
+            break;
+        }
+        case "reverse-registrar": {
+            Client = ReverseRegistrarClient;
+            break;
+        }
+        case "arc200": {
+            Client = OSARC200TokenClient;
+            break;
+        }
+        case "collection-registrar": {
+            Client = CollectionRegistrarClient;
+            break;
+        }
+        case "staking-registrar": {
+            Client = StakingRegistrarClient;
             break;
         }
         default: {
@@ -163,6 +234,432 @@ program
     }
     console.log(apid);
 });
+// begin arc200
+const factory = new Command("factory").description("Manage arc200 token factory");
+export const factoryCreate = async (options) => {
+    if (options.debug) {
+        console.log(options);
+    }
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenFactorySpec.contract.methods), {
+        addr,
+        sk: new Uint8Array(0),
+    });
+    ci.setPaymentAmount(1152300);
+    ci.setFee(4000);
+    const createR = await ci.create();
+    if (options.debug) {
+        console.log(createR);
+    }
+    if (createR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(createR.txns, sk);
+        }
+        return Number(createR.returnValue);
+    }
+    return 0;
+};
+factory
+    .command("create")
+    .description("Create a new arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .option("--debug", "Debug the deployment", false)
+    .option("-r, --simulate", "Simulate the deployment", false)
+    .action(async (options) => {
+    const apid = await factoryCreate({
+        ...options,
+    });
+    console.log("apid:", apid);
+});
+const utilCmd = new Command("util").description("Utility commands");
+export const utilBigIntToUint8Array = async (options) => {
+    return bigIntToUint8Array(BigInt(options.value));
+};
+utilCmd
+    .command("bigint-to-uint8array")
+    .description("Convert a bigint to a uint8array")
+    .requiredOption("-v, --value <number>", "The value to convert")
+    .action(async (options) => {
+    const uint8array = await utilBigIntToUint8Array(options);
+    console.log(Buffer.from(uint8array).toString("hex"));
+});
+export const utilNamehash = async (options) => {
+    const namehashR = namehash(options.name);
+    return namehashR;
+};
+utilCmd
+    .command("namehash")
+    .description("Namehash a given name")
+    .requiredOption("-n, --name <string>", "The name to namehash")
+    .action(async (options) => {
+    const namehashR = await utilNamehash(options);
+    console.log(namehashR);
+});
+const arc200Cmd = new Command("arc200").description("Manage arc200 token");
+export const arc200PostUpdate = async (options) => {
+    const sender = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: sender,
+        sk: secretKey,
+    });
+    const postUpdateR = await ci.post_update();
+    if (options.debug) {
+        console.log(postUpdateR);
+    }
+    if (postUpdateR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(postUpdateR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+arc200Cmd
+    .command("post-update")
+    .description("Post update to the arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .option("--debug", "Debug the deployment", false)
+    .option("-r, --simulate", "Simulate the deployment", false)
+    .action(async (options) => {
+    await arc200PostUpdate(options);
+});
+export const arc200Decimals = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const decimalsR = (await ci.arc200_decimals()).returnValue;
+    return decimalsR.toString();
+};
+export const arc200Symbol = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const symbolR = stripTrailingZeroBytes(new TextDecoder().decode(Buffer.from((await ci.arc200_symbol()).returnValue)));
+    return symbolR;
+};
+export const arc200Name = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const nameR = stripTrailingZeroBytes(new TextDecoder().decode(Buffer.from((await ci.arc200_name()).returnValue)));
+    return nameR;
+};
+export const arc200TotalSupply = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const totalSupplyR = await ci.arc200_totalSupply();
+    return totalSupplyR.returnValue.toString();
+};
+export const arc200GetState = async (options) => {
+    const globalState = await new OSARC200TokenClient({ resolveBy: "id", id: Number(options.apid) }, algodClient).getGlobalState();
+    if (options.lazy) {
+        return { globalState };
+    }
+    const state = {
+        contractVersion: globalState.contractVersion?.asNumber(),
+        deploymentVersion: globalState.deploymentVersion?.asNumber(),
+        owner: algosdk.encodeAddress(globalState.owner?.asByteArray() || new Uint8Array()),
+        updatable: globalState.updatable?.asNumber(),
+        upgrader: algosdk.encodeAddress(globalState.upgrader?.asByteArray() || new Uint8Array()),
+        name: stripTrailingZeroBytes(globalState.name?.asString() || ""),
+        symbol: stripTrailingZeroBytes(globalState.symbol?.asString() || ""),
+        totalSupply: uint8ArrayToBigInt(globalState.totalSupply?.asByteArray() || new Uint8Array()).toString(),
+        decimals: globalState.decimals?.asNumber(),
+    };
+    return state;
+};
+arc200Cmd
+    .command("get")
+    .description("Get the state of the arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .action(async (options) => {
+    const globalState = await arc200GetState(options);
+    console.log({ globalState });
+    return globalState;
+});
+export const arc200DeleteApproval = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: options.owner,
+        sk: new Uint8Array(0),
+    });
+    const deleteApprovalR = await ci.deleteApproval(options.owner, options.spender);
+    if (options.debug) {
+        console.log(deleteApprovalR);
+    }
+    if (deleteApprovalR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(deleteApprovalR.txns, sk);
+        }
+        return true;
+    }
+    return false;
+};
+export const arc200DeleteBalance = async (options) => {
+    if (options.debug) {
+        console.log(options);
+    }
+    const sender = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: sender,
+        sk: secretKey,
+    });
+    const deleteBalanceR = await ci.deleteBalance(options.owner);
+    if (options.debug) {
+        console.log(deleteBalanceR);
+    }
+    if (deleteBalanceR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(deleteBalanceR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const arc200Mint = async (options) => {
+    if (options.debug) {
+        console.log(options);
+        const globalState = await new OSARC200TokenClient({ resolveBy: "id", id: Number(options.apid) }, algodClient).getGlobalState();
+        console.log("globalState", globalState);
+    }
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: options.sender || addr,
+        sk: options.sk || sk,
+    });
+    ci.setFee(2000);
+    ci.setPaymentAmount(1e6);
+    const name = new Uint8Array(Buffer.from(padStringWithZeroBytes(options.name, 32), "utf8"));
+    const symbol = new Uint8Array(Buffer.from(padStringWithZeroBytes(options.symbol, 8), "utf8"));
+    const mintR = await ci.mint(options.recipient, name, symbol, options.decimals, options.totalSupply);
+    if (options.debug) {
+        console.log(mintR);
+    }
+    if (mintR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(mintR.txns, options.sk || sk);
+        }
+        return true;
+    }
+    return false;
+};
+arc200Cmd
+    .command("mint")
+    .description("Get the state of the arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .requiredOption("-r, --recipient <string>", "Specify the recipient address")
+    .requiredOption("-n, --name <string>", "Specify the name")
+    .requiredOption("-s, --symbol <string>", "Specify the symbol")
+    .requiredOption("-t, --total-supply <number>", "Specify the total supply")
+    .requiredOption("-d, --decimals <number>", "Specify the decimals")
+    .option("-v, --simulate", "Simulate the mint", false)
+    .option("--debug", "Debug the deployment", false)
+    .action(async (options) => {
+    const success = await arc200Mint({
+        ...options,
+        //recipient: algosdk.decodeAddress(options.recipient).publicKey,
+        name: new Uint8Array(Buffer.from(padStringWithZeroBytes(options.name, 32), "utf8")),
+        symbol: new Uint8Array(Buffer.from(padStringWithZeroBytes(options.symbol, 8), "utf8")),
+        decimals: Number(options.decimals),
+        totalSupply: BigInt(new BigNumber(options.totalSupply)
+            .multipliedBy(10 ** options.decimals)
+            .toFixed(0)),
+    });
+    console.log("Mint success:", success);
+});
+export const arc200BalanceOf = async (options) => {
+    const owner = options.owner || addr;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: owner,
+        sk: new Uint8Array(0),
+    });
+    const balanceR = (await ci.arc200_balanceOf(owner)).returnValue;
+    return balanceR.toString();
+};
+arc200Cmd
+    .command("balance")
+    .description("Get the balance of the arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .option("-o, --owner <string>", "Specify the owner address")
+    .action(async (options) => {
+    const balance = await arc200BalanceOf(options);
+    console.log(balance);
+});
+export const arc200Allowance = async (options) => {
+    const owner = options.owner || addr;
+    const spender = options.spender || addr;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: owner,
+        sk: new Uint8Array(0),
+    });
+    const allowanceR = await ci.arc200_allowance(owner, spender);
+    return allowanceR.returnValue.toString();
+};
+arc200Cmd
+    .command("allowance")
+    .description("Get the allowance of the arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .option("-o, --owner <string>", "Specify the owner address")
+    .option("-s, --spender <string>", "Specify the spender address")
+    .action(async (options) => {
+    const allowance = (await arc200Allowance(options)).returnValue.toString();
+    console.log(allowance);
+});
+export const arc200Approve = async (options) => {
+    if (options.debug) {
+        console.log(options);
+    }
+    const sender = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: sender,
+        sk: secretKey,
+    });
+    ci.setPaymentAmount(28500 + (options.extraPayment || 0));
+    const approveR = await ci.arc200_approve(options.spender, options.amount);
+    if (options.debug) {
+        console.log(approveR);
+    }
+    if (approveR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(approveR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+arc200Cmd
+    .command("approve")
+    .description("Approve the arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .requiredOption("-s, --spender <string>", "Specify the spender address")
+    .requiredOption("-m, --amount <number>", "Specify the amount")
+    .option("-t, --simulate", "Simulate the approval", false)
+    .option("--debug", "Debug the deployment", false)
+    .action(async (options) => {
+    const success = await arc200Approve({
+        ...options,
+        amount: BigInt(options.amount),
+    });
+    console.log("Approve success:", success);
+});
+export const arc200Transfer = async (options) => {
+    if (options.debug) {
+        console.log(options);
+    }
+    const sender = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: sender,
+        sk: secretKey,
+    });
+    ci.setPaymentAmount(28500);
+    const transferR = await ci.arc200_transfer(options.receiver, options.amount);
+    if (options.debug) {
+        console.log(transferR);
+    }
+    if (transferR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(transferR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+arc200Cmd
+    .command("transfer")
+    .description("Transfer the arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .requiredOption("-r, --receiver <string>", "Specify the receiver address")
+    .requiredOption("-m, --amount <number>", "Specify the amount")
+    .option("-s, --simulate", "Simulate the transfer", false)
+    .option("--debug", "Debug the deployment", false)
+    .action(async (options) => {
+    const success = await arc200Transfer({
+        ...options,
+        amount: BigInt(options.amount),
+    });
+    console.log("Transfer success:", success);
+});
+export const arc200TransferFrom = async (options) => {
+    if (options.debug) {
+        console.log(options);
+    }
+    const sender = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: sender,
+        sk: secretKey,
+    });
+    const transferFromR = await ci.arc200_transferFrom(options.owner, options.receiver, options.amount);
+    if (options.debug) {
+        console.log(transferFromR);
+    }
+    if (transferFromR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(transferFromR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+arc200Cmd
+    .command("update")
+    .description("Update the arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .option("-s, --simulate", "Simulate the update", false)
+    .option("--debug", "Debug the deployment", false)
+    .action(async (options) => {
+    if (options.debug) {
+        console.log("options", options);
+    }
+    const apid = Number(options.apid);
+    const res = await new OSARC200TokenClient({
+        resolveBy: "id",
+        id: apid,
+        sender: {
+            addr,
+            sk,
+        },
+    }, algodClient).appClient.update();
+    if (options.debug) {
+        console.log(res);
+    }
+});
+export const arc200Kill = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    ci.setFee(3000);
+    ci.setOnComplete(5); // deleteApplicationOC
+    const killR = await ci.kill();
+    if (options.debug) {
+        console.log(killR);
+    }
+    if (killR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(killR.txns, sk);
+        }
+        return true;
+    }
+    return false;
+};
+arc200Cmd
+    .command("kill")
+    .description("Kill the arc200 token")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .option("-s, --simulate", "Simulate the kill", false)
+    .option("--debug", "Debug the deployment", false)
+    .action(async (options) => {
+    const success = await arc200Kill(options);
+    console.log("Kill success:", success);
+});
+// end arc200
 // vns
 //   deploy
 //     node main.js deploy --type "vns-registry" --name registry3 --debug
@@ -199,7 +696,7 @@ program
 //   root owner can set resolver
 //   root owner can set ttl
 //   upgrader can kill
-const vns = new Command("vns").description("Manage vns registry");
+const vnsCmd = new Command("vns").description("Manage vns registry");
 export const killApplication = async (options) => {
     const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrySpec.contract.methods), {
         addr: addr,
@@ -222,7 +719,7 @@ export const killApplication = async (options) => {
     }
     return false;
 };
-vns
+vnsCmd
     .command("kill")
     .description("Kill the vns registry")
     .option("--debug", "Debug the deployment", false)
@@ -266,7 +763,7 @@ export const killNode = async (options) => {
     }
     return false;
 };
-vns
+vnsCmd
     .command("kill-node")
     .description("Kill a node from the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
@@ -307,7 +804,7 @@ export const deleteBox = async (options) => {
     }
     return false;
 };
-vns
+vnsCmd
     .command("delete-box")
     .description("Delete a box from the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
@@ -318,7 +815,9 @@ export const postUpdate = async (options) => {
     if (options.debug) {
         console.log(options);
     }
-    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrySpec.contract.methods), {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, !options.rapid
+        ? makeSpec(VNSRegistrySpec.contract.methods)
+        : makeSpec(VNSPublicResolverSpec.contract.methods), {
         addr: addr,
         sk: sk,
     });
@@ -326,7 +825,9 @@ export const postUpdate = async (options) => {
         const amountBI = BigInt(options.extraPayment);
         ci.setPaymentAmount(Number(amountBI));
     }
-    const postUpdateR = await ci.post_update();
+    const postUpdateR = await (!options.rapid
+        ? ci.post_update()
+        : ci.post_update(options.rapid));
     if (options.debug) {
         console.log(postUpdateR);
     }
@@ -338,7 +839,7 @@ export const postUpdate = async (options) => {
     }
     return false;
 };
-vns
+vnsCmd
     .command("post-update")
     .description("Post update the arc72 token")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
@@ -346,6 +847,29 @@ vns
     .option("--debug", "Debug the deployment", false)
     .option("-e, --extra-payment <number>", "Specify the extra payment", false)
     .action(postUpdate);
+export const setRegistryResolver = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrySpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const setRegistryResolverR = await ci.setRegistryResolver(options.resolver);
+    if (options.debug) {
+        if (setRegistryResolverR.success) {
+            await signSendAndConfirm(setRegistryResolverR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+vnsCmd
+    .command("set-registry-resolver")
+    .description("Set the registry resolver of the vns registry")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .requiredOption("-r, --resolver <number>", "Specify the resolver")
+    .option("--debug", "Debug the deployment", false)
+    .action(setRegistryResolver);
 export const ownerOf = async (options) => {
     if (options.debug) {
         console.log(options);
@@ -361,13 +885,16 @@ export const ownerOf = async (options) => {
     }
     return ownerOfR.returnValue;
 };
-vns
-    .command("ownerOf")
+vnsCmd
+    .command("owner-of")
     .description("Get the owner of the arc72 token")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
     .option("-t, --node <string>", "Specify the node")
     .option("-d, --debug", "Debug the deployment", false)
-    .action(ownerOf);
+    .action(async (options) => {
+    const res = await ownerOf(options);
+    console.log(res);
+});
 export const resolver = async (options) => {
     const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrySpec.contract.methods), {
         addr: addr,
@@ -379,7 +906,7 @@ export const resolver = async (options) => {
     }
     return resolverR.returnValue;
 };
-vns
+vnsCmd
     .command("resolver")
     .description("Get the resolver of the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
@@ -397,7 +924,7 @@ export const ttl = async (options) => {
     }
     return ttlR.returnValue;
 };
-vns
+vnsCmd
     .command("ttl")
     .description("Get the ttl of the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
@@ -423,7 +950,7 @@ export const setResolver = async (options) => {
     }
     return false;
 };
-vns
+vnsCmd
     .command("set-resolver")
     .description("Set the resolver of the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
@@ -447,7 +974,7 @@ export const setTTL = async (options) => {
     }
     return false;
 };
-vns
+vnsCmd
     .command("set-ttl")
     .description("Set the ttl of the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
@@ -472,7 +999,7 @@ export const setRecord = async (options) => {
     }
     return false;
 };
-vns
+vnsCmd
     .command("set-record")
     .description("Set the record of the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
@@ -506,13 +1033,13 @@ export const setSubnodeOwner = async (options) => {
     }
     return new Uint8Array(32);
 };
-vns
+vnsCmd
     .command("set-subnode-owner")
     .description("Set the subnode owner of the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
-    .requiredOption("-n, --node <string>", "Specify the node")
     .requiredOption("-l, --label <string>", "Specify the label")
     .requiredOption("-o, --owner <string>", "Specify the owner")
+    .option("-n, --node <string>", "Specify the node")
     .option("-s, --simulate", "Simulate the set subnode owner", false)
     .option("-d, --debug", "Debug the deployment", false)
     .action(setSubnodeOwner);
@@ -535,7 +1062,7 @@ export const setOwner = async (options) => {
     }
     return false;
 };
-vns
+vnsCmd
     .command("set-owner")
     .description("Set the owner of the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
@@ -559,7 +1086,7 @@ export const setApprovalForAll = async (options) => {
     }
     return false;
 };
-vns
+vnsCmd
     .command("set-approval-for-all")
     .description("Set the approval for all of the arc72 token")
     .action(setApprovalForAll);
@@ -574,1271 +1101,1495 @@ export const isApprovedForAll = async (options) => {
     }
     return isApprovedForAllR.returnValue;
 };
-vns
+vnsCmd
     .command("is-approved-for-all")
     .description("Check if the operator is approved for all of the vns registry")
     .action(isApprovedForAll);
-// ------------------------------------------------------------------------------------------------
-// const arc72 = new Command("arc72").description("Manage arc72 token");
-// interface ARC72GlobalStateOptions {
-//   apid: number;
-//   lazy?: boolean;
-// }
-// export const arc72GetState: any = async (options: ARC72GlobalStateOptions) => {
-//   const globalState = await new OSARC72TokenClient(
-//     { resolveBy: "id", id: Number(options.apid) },
-//     algodClient
-//   ).getGlobalState();
-//   if (options.lazy) {
-//     return { globalState };
-//   }
-//   const state = {
-//     totalSupply: uint8ArrayToBigInt(
-//       globalState.totalSupply?.asByteArray() || new Uint8Array()
-//     ).toString(),
-//   };
-//   return state;
-// };
-// arc72
-//   .command("get")
-//   .description("Get the state of the arc72 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .action(async (options: ARC72GlobalStateOptions) => {
-//     const globalState = await arc72GetState(options);
-//     console.log({ globalState });
-//     return globalState;
-//   });
-// arc72
-//   .command("totalSupply")
-//   .description("Get the total supply of the arc72 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .action(async (options: any) => {
-//     const ci = new CONTRACT(
-//       Number(options.apid),
-//       algodClient,
-//       indexerClient,
-//       makeSpec(OSARC72TokenSpec.contract.methods),
-//       {
-//         addr: addr,
-//         sk: sk,
-//       }
-//     );
-//     const arc72_totalSupplyR = await ci.arc72_totalSupply();
-//     if (arc72_totalSupplyR.success) {
-//       console.log(arc72_totalSupplyR.returnValue.toString());
-//     }
-//   });
-// arc72
-//   .command("balanceOf")
-//   .description("Get the balance of the arc72 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-t, --address <string>", "Specify the address")
-//   .action(async (options: any) => {
-//     const ci = new CONTRACT(
-//       Number(options.apid),
-//       algodClient,
-//       indexerClient,
-//       makeSpec(OSARC72TokenSpec.contract.methods),
-//       {
-//         addr: addr,
-//         sk: sk,
-//       }
-//     );
-//     const arc72_balanceOfR = await ci.arc72_balanceOf(options.address);
-//     if (arc72_balanceOfR.success) {
-//       console.log(arc72_balanceOfR.returnValue.toString());
-//     }
-//   });
-// arc72
-//   .command("ownerOf")
-//   .description("Get the owner of the arc72 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-t, --token-id <number>", "Specify the token ID")
-//   .option("-d, --debug", "Debug the deployment", false)
-//   .action(async (options: any) => {
-//     if (options.debug) {
-//       console.log(options);
-//     }
-//     const ci = new CONTRACT(
-//       Number(options.apid),
-//       algodClient,
-//       indexerClient,
-//       makeSpec(OSARC72TokenSpec.contract.methods),
-//       {
-//         addr: addr,
-//         sk: sk,
-//       }
-//     );
-//     const arc72_ownerOfR = await ci.arc72_ownerOf(BigInt(options.tokenId));
-//     if (arc72_ownerOfR.success) {
-//       console.log(arc72_ownerOfR.returnValue);
-//     }
-//   });
-// arc72
-//   .command("tokenURI")
-//   .description("Get the token URI of the arc72 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-t, --token-id <number>", "Specify the token ID")
-//   .action(async (options: any) => {
-//     const ci = new CONTRACT(
-//       Number(options.apid),
-//       algodClient,
-//       indexerClient,
-//       makeSpec(OSARC72TokenSpec.contract.methods),
-//       {
-//         addr: addr,
-//         sk: sk,
-//       }
-//     );
-//     const arc72_tokenURIR = await ci.arc72_tokenURI(BigInt(options.tokenId));
-//     console.log(arc72_tokenURIR);
-//   });
-// interface ARC72MintOptions {
-//   apid: number;
-//   to: string;
-//   tokenId: number;
-//   metadata: string;
-//   transferOwnership?: boolean;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// arc72
-//   .command("mint")
-//   .description("Mint arc72 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-t, --to <string>", "Specify the receiver address")
-//   .requiredOption("-i, --token-id <number>", "Specify the token ID")
-//   .option("-m, --metadata <string>", "Specify the metadata")
-//   .option("-r, --transfer-ownership", "Transfer ownership", false)
-//   .option("-s, --simulate", "Simulate the mint", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options: ARC72MintOptions) => {
-//     if (options.debug) {
-//       console.log(options);
-//     }
-//     const apid = Number(options.apid);
-//     const to = options.to;
-//     const tokenId = BigInt(options.tokenId);
-//     const metadata = options.metadata
-//       ? new Uint8Array(
-//           Buffer.from(padStringWithZeroBytes(options.metadata, 256), "utf8")
-//         )
-//       : new Uint8Array(256);
-//     const ci = new CONTRACT(apid, algodClient, indexerClient, abi.custom, {
-//       addr: addr,
-//       sk: sk,
-//     });
-//     const builder = {
-//       arc72: new CONTRACT(
-//         apid,
-//         algodClient,
-//         indexerClient,
-//         makeSpec(OSARC72TokenSpec.contract.methods),
-//         {
-//           addr: addr,
-//           sk: sk,
-//         },
-//         true,
-//         false,
-//         true
-//       ),
-//       ownable: new CONTRACT(
-//         Number(options.tokenId),
-//         algodClient,
-//         indexerClient,
-//         makeSpec(OwnableSpec.contract.methods),
-//         {
-//           addr: addr,
-//           sk: sk,
-//         },
-//         true,
-//         false,
-//         true
-//       ),
-//     };
-//     const buildN = [];
-//     if (options.transferOwnership) {
-//       const txnO = (
-//         await builder.ownable.transfer(algosdk.getApplicationAddress(apid))
-//       ).obj;
-//       console.log({ transfer: txnO });
-//       buildN.push({
-//         ...txnO,
-//       });
-//     }
-//     const txnO = options.metadata
-//       ? (await builder.arc72.mint(to, tokenId, metadata)).obj
-//       : (await builder.arc72.mint(to, tokenId)).obj;
-//     console.log({ mint: txnO });
-//     buildN.push({
-//       ...txnO,
-//       payment: 336700,
-//     });
-//     ci.setFee(3000);
-//     ci.setEnableGroupResourceSharing(true);
-//     ci.setExtraTxns(buildN);
-//     const customR = await ci.custom();
-//     if (options.debug) {
-//       console.log(customR);
-//     }
-//     if (customR.success) {
-//       if (!options.simulate) {
-//         await signSendAndConfirm(customR.txns, sk);
-//       }
-//     }
-//   });
-// arc72
-//   .command("burn")
-//   .description("Burn arc72 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-t, --token-id <number>", "Specify the token ID")
-//   .option("-s, --simulate", "Simulate the burn", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options: any) => {
-//     const ci = new CONTRACT(
-//       Number(options.apid),
-//       algodClient,
-//       indexerClient,
-//       makeSpec(OSARC72TokenSpec.contract.methods),
-//       {
-//         addr: addr,
-//         sk: sk,
-//       }
-//     );
-//     ci.setFee(3000);
-//     const burnR = await ci.burn(BigInt(options.tokenId));
-//     if (options.debug) {
-//       console.log(burnR);
-//     }
-//     if (burnR.success) {
-//       if (!options.simulate) {
-//         await signSendAndConfirm(burnR.txns, sk);
-//       }
-//     }
-//   });
-// arc72
-//   .command("update")
-//   .description("Update the arc72 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .option("-s, --simulate", "Simulate the update", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options) => {
-//     const apid = Number(options.apid);
-//     const res = await new OSARC72TokenClient(
-//       {
-//         resolveBy: "id",
-//         id: apid,
-//         sender: {
-//           addr,
-//           sk,
-//         },
-//       },
-//       algodClient
-//     ).appClient.update();
-//   });
-// // TODO add post update
-// arc72
-//   .command("post-update")
-//   .description("Post update the arc72 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .option("-s, --simulate", "Simulate the post update", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options) => {
-//     const ci = new CONTRACT(
-//       Number(options.apid),
-//       algodClient,
-//       indexerClient,
-//       makeSpec(OSARC72TokenSpec.contract.methods),
-//       {
-//         addr: addr,
-//         sk: sk,
-//       }
-//     );
-//     const postUpdateR = await ci.post_update();
-//     if (options.debug) {
-//       console.log(postUpdateR);
-//     }
-//     if (postUpdateR.success) {
-//       if (!options.simulate) {
-//         await signSendAndConfirm(postUpdateR.txns, sk);
-//       }
-//     }
-//   });
-// interface ARC72KillOptions {
-//   apid: number;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const arc72Kill: any = async (options: ARC72KillOptions) => {
-//   const ci = new CONTRACT(
-//     Number(options.apid),
-//     algodClient,
-//     indexerClient,
-//     makeSpec(OSARC200TokenSpec.contract.methods),
-//     {
-//       addr: addr,
-//       sk: sk,
-//     }
-//   );
-//   ci.setPaymentAmount(1e6);
-//   ci.setFee(3000);
-//   ci.setOnComplete(5); // deleteApplicationOC
-//   const killR = await ci.kill();
-//   if (options.debug) {
-//     console.log(killR);
-//   }
-//   if (killR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(killR.txns, sk);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// arc72
-//   .command("kill")
-//   .description("Kill the arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .option("-s, --simulate", "Simulate the kill", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options) => {
-//     const success = await arc72Kill(options);
-//     console.log("Kill success:", success);
-//   });
-// // ----------------------------
-// function numberToByteArray(number: number, byteLength = 1) {
-//   if (number < 0 || number >= Math.pow(256, byteLength)) {
-//     throw new RangeError(
-//       `Number ${number} cannot be represented in ${byteLength} bytes.`
-//     );
-//   }
-//   const byteArray = new Uint8Array(byteLength);
-//   for (let i = byteLength - 1; i >= 0; i--) {
-//     byteArray[i] = number & 0xff;
-//     number = number >> 8;
-//   }
-//   return byteArray;
-// }
-// const arc72Generate = new Command("generate").description(
-//   "ARC72 generate utility"
-// );
-// arc72Generate
-//   .command("generate-royalty-b64")
-//   .description("Generate royalty b64")
-//   .requiredOption("-r, --royalty-points <number>", "Specify the royalty points")
-//   .requiredOption(
-//     "-c --creator1-points <number>",
-//     "Specify the creator1 points"
-//   )
-//   .requiredOption(
-//     "-d --creator2-points <number>",
-//     "Specify the creator2 points"
-//   )
-//   .requiredOption(
-//     "-e --creator3-points <number>",
-//     "Specify the creator3 points"
-//   )
-//   .requiredOption(
-//     "-f --creator1-address <number>",
-//     "Specify the creator1 address"
-//   )
-//   .requiredOption(
-//     "-g --creator2-address <number>",
-//     "Specify the creator2 address"
-//   )
-//   .requiredOption(
-//     "-h --creator3-address <number>",
-//     "Specify the creator3 address"
-//   )
-//   .action(async (options: any) => {
-//     const royaltyPoints = Number(options.royaltyPoints);
-//     const royaltyPointsBytes = numberToByteArray(royaltyPoints, 2);
-//     const creator1Points = Number(options.creator1Points);
-//     const creator1PointsBytes = numberToByteArray(creator1Points, 2);
-//     const creator2Points = Number(options.creator2Points);
-//     const creator2PointsBytes = numberToByteArray(creator2Points, 2);
-//     const creator3Points = Number(options.creator3Points);
-//     const creator3PointsBytes = numberToByteArray(creator3Points, 2);
-//     const creator1Address = options.creator1Address;
-//     const creator2Address = options.creator2Address;
-//     const creator3Address = options.creator3Address;
-//     const royalty = [
-//       ...royaltyPointsBytes,
-//       ...creator1PointsBytes,
-//       ...creator2PointsBytes,
-//       ...creator3PointsBytes,
-//       ...new Uint8Array(algosdk.decodeAddress(creator1Address).publicKey),
-//       ...new Uint8Array(algosdk.decodeAddress(creator2Address).publicKey),
-//       ...new Uint8Array(algosdk.decodeAddress(creator3Address).publicKey),
-//     ];
-//     console.log(Buffer.from(royalty).toString("base64"));
-//   });
-// arc72.addCommand(arc72Generate);
-// const arc200 = new Command("arc200").description("Manage arc200 token");
-// interface ARC200GlobalStateOptions {
-//   apid: number;
-//   lazy?: boolean;
-// }
-// export const arc200GetState: any = async (
-//   options: ARC200GlobalStateOptions
-// ) => {
-//   const globalState = await new OSARC200TokenClient(
-//     { resolveBy: "id", id: Number(options.apid) },
-//     algodClient
-//   ).getGlobalState();
-//   if (options.lazy) {
-//     return { globalState };
-//   }
-//   const state = {
-//     contractVersion: globalState.contractVersion?.asNumber(),
-//     deploymentVersion: globalState.deploymentVersion?.asNumber(),
-//     owner: algosdk.encodeAddress(
-//       globalState.owner?.asByteArray() || new Uint8Array()
-//     ),
-//     updatable: globalState.updatable?.asNumber(),
-//     upgrader: algosdk.encodeAddress(
-//       globalState.upgrader?.asByteArray() || new Uint8Array()
-//     ),
-//     name: stripTrailingZeroBytes(globalState.name?.asString() || ""),
-//     symbol: stripTrailingZeroBytes(globalState.symbol?.asString() || ""),
-//     totalSupply: uint8ArrayToBigInt(
-//       globalState.totalSupply?.asByteArray() || new Uint8Array()
-//     ).toString(),
-//     decimals: globalState.decimals?.asNumber(),
-//   };
-//   return state;
-// };
-// arc200
-//   .command("get")
-//   .description("Get the state of the arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .action(async (options: ARC200GlobalStateOptions) => {
-//     const globalState = await arc200GetState(options);
-//     console.log({ globalState });
-//     return globalState;
-//   });
-// interface ARC200MintOptions {
-//   apid: number;
-//   name: string;
-//   symbol: string;
-//   totalSupply: number;
-//   decimals: number;
-//   sender?: string;
-//   sk?: any;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const arc200Mint: any = async (options: ARC200MintOptions) => {
-//   const globalState = await new OSARC200TokenClient(
-//     { resolveBy: "id", id: Number(options.apid) },
-//     algodClient
-//   ).getGlobalState();
-//   if (options.debug) {
-//     console.log(options);
-//   }
-//   const ci = new CONTRACT(
-//     Number(options.apid),
-//     algodClient,
-//     indexerClient,
-//     makeSpec(OSARC200TokenSpec.contract.methods),
-//     {
-//       addr: options.sender || addr,
-//       sk: options.sk || sk,
-//     }
-//   );
-//   ci.setFee(2000);
-//   ci.setPaymentAmount(1e6);
-//   const mintR = await ci.mint(
-//     options.name,
-//     options.symbol,
-//     options.decimals,
-//     options.totalSupply
-//   );
-//   if (options.debug) {
-//     console.log(mintR);
-//   }
-//   if (mintR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(mintR.txns, options.sk || sk);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// arc200
-//   .command("mint")
-//   .description("Get the state of the arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-n, --name <string>", "Specify the name")
-//   .requiredOption("-s, --symbol <string>", "Specify the symbol")
-//   .requiredOption("-t, --total-supply <number>", "Specify the total supply")
-//   .requiredOption("-d, --decimals <number>", "Specify the decimals")
-//   .option("-r, --simulate", "Simulate the mint", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options) => {
-//     const success = await arc200Mint({
-//       ...options,
-//       name: new Uint8Array(
-//         Buffer.from(padStringWithZeroBytes(options.name, 32), "utf8")
-//       ),
-//       symbol: new Uint8Array(
-//         Buffer.from(padStringWithZeroBytes(options.symbol, 8), "utf8")
-//       ),
-//       decimals: Number(options.decimals),
-//       totalSupply: BigInt(
-//         new BigNumber(options.totalSupply)
-//           .multipliedBy(10 ** options.decimals)
-//           .toFixed(0)
-//       ),
-//     });
-//     console.log("Mint success:", success);
-//   });
-// interface ARC200BalanceOfOptions {
-//   apid: number;
-//   owner: string;
-// }
-// export const arc200BalanceOf: any = async (options: ARC200BalanceOfOptions) => {
-//   const owner = options.owner || addr;
-//   const ci = new CONTRACT(
-//     Number(options.apid),
-//     algodClient,
-//     indexerClient,
-//     makeSpec(OSARC200TokenSpec.contract.methods),
-//     {
-//       addr: owner,
-//       sk: new Uint8Array(0),
-//     }
-//   );
-//   const balanceR = (await ci.arc200_balanceOf(owner)).returnValue;
-//   return balanceR.toString();
-// };
-// arc200
-//   .command("balance")
-//   .description("Get the balance of the arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .option("-o, --owner <string>", "Specify the owner address")
-//   .action(async (options) => {
-//     const balance = await arc200BalanceOf(options);
-//     console.log(balance);
-//   });
-// interface ARC200AllowanceOptions {
-//   apid: number;
-//   owner: string;
-//   spender: string;
-// }
-// export const arc200Allowance: any = async (options: ARC200AllowanceOptions) => {
-//   const owner = options.owner || addr;
-//   const spender = options.spender || addr;
-//   const ci = new CONTRACT(
-//     Number(options.apid),
-//     algodClient,
-//     indexerClient,
-//     makeSpec(OSARC200TokenSpec.contract.methods),
-//     {
-//       addr: owner,
-//       sk: new Uint8Array(0),
-//     }
-//   );
-//   const allowanceR = await ci.arc200_allowance(owner, spender);
-//   return allowanceR;
-// };
-// arc200
-//   .command("allowance")
-//   .description("Get the allowance of the arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .option("-o, --owner <string>", "Specify the owner address")
-//   .option("-s, --spender <string>", "Specify the spender address")
-//   .action(async (options) => {
-//     const allowance = (await arc200Allowance(options)).returnValue.toString();
-//     console.log(allowance);
-//   });
-// interface ARC200ApproveOptions {
-//   apid: number;
-//   spender: string;
-//   amount: number;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const arc200Approve: any = async (options: ARC200ApproveOptions) => {
-//   const ci = new CONTRACT(
-//     Number(options.apid),
-//     algodClient,
-//     indexerClient,
-//     makeSpec(OSARC200TokenSpec.contract.methods),
-//     {
-//       addr: addr,
-//       sk: sk,
-//     }
-//   );
-//   ci.setPaymentAmount(28500 + 3500);
-//   const approveR = await ci.arc200_approve(options.spender, options.amount);
-//   if (options.debug) {
-//     console.log(approveR);
-//   }
-//   if (approveR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(approveR.txns, sk);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// arc200
-//   .command("approve")
-//   .description("Approve the arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-s, --spender <string>", "Specify the spender address")
-//   .requiredOption("-m, --amount <number>", "Specify the amount")
-//   .option("-t, --simulate", "Simulate the approval", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options) => {
-//     const success = await arc200Approve({
-//       ...options,
-//       amount: BigInt(options.amount),
-//     });
-//     console.log("Approve success:", success);
-//   });
-// interface ARC200TransferOptions {
-//   apid: number;
-//   receiver: string;
-//   amount: number;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const arc200Transfer: any = async (options: ARC200TransferOptions) => {
-//   const ci = new CONTRACT(
-//     Number(options.apid),
-//     algodClient,
-//     indexerClient,
-//     makeSpec(OSARC200TokenSpec.contract.methods),
-//     {
-//       addr: addr,
-//       sk: sk,
-//     }
-//   );
-//   ci.setPaymentAmount(28500);
-//   const transferR = await ci.arc200_transfer(options.receiver, options.amount);
-//   if (options.debug) {
-//     console.log(transferR);
-//   }
-//   if (transferR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(transferR.txns, sk);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// arc200
-//   .command("transfer")
-//   .description("Transfer the arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-r, --receiver <string>", "Specify the receiver address")
-//   .requiredOption("-m, --amount <number>", "Specify the amount")
-//   .option("-s, --simulate", "Simulate the transfer", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options) => {
-//     const success = await arc200Transfer({
-//       ...options,
-//       amount: BigInt(options.amount),
-//     });
-//     console.log("Transfer success:", success);
-//   });
-// arc200
-//   .command("update")
-//   .description("Update the arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .option("-s, --simulate", "Simulate the update", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options) => {
-//     const apid = Number(options.apid);
-//     const res = await new OSARC200TokenClient(
-//       {
-//         resolveBy: "id",
-//         id: apid,
-//         sender: {
-//           addr,
-//           sk,
-//         },
-//       },
-//       algodClient
-//     ).appClient.update();
-//   });
-// interface ARC200KillOptions {
-//   apid: number;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const arc200Kill: any = async (options: ARC200KillOptions) => {
-//   const ci = new CONTRACT(
-//     Number(options.apid),
-//     algodClient,
-//     indexerClient,
-//     makeSpec(OSARC200TokenSpec.contract.methods),
-//     {
-//       addr: addr,
-//       sk: sk,
-//     }
-//   );
-//   ci.setFee(3000);
-//   ci.setOnComplete(5); // deleteApplicationOC
-//   const killR = await ci.kill();
-//   if (options.debug) {
-//     console.log(killR);
-//   }
-//   if (killR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(killR.txns, sk);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// arc200
-//   .command("kill")
-//   .description("Kill the arc200 token")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .option("-s, --simulate", "Simulate the kill", false)
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options) => {
-//     const success = await arc200Kill(options);
-//     console.log("Kill success:", success);
-//   });
-// interface AirdropApproveUpdateOptions {
-//   apid: number;
-//   approval: boolean;
-//   simulate?: boolean;
-//   sender?: string;
-// }
-// export const airdropApproveUpdate: any = async (
-//   options: AirdropApproveUpdateOptions
-// ) => {
-//   const ci = makeCi(options.apid, options.sender || addr2);
-//   const approveR = await ci.approve_update(options.approval);
-//   if (approveR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(approveR.txns, sk2);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// interface AirdropTransferOptions {
-//   apid: number;
-//   receiver: number;
-//   sender?: string;
-//   sk?: any;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const airdropTransfer: any = async (options: AirdropTransferOptions) => {
-//   if (options.debug) {
-//     console.log(options);
-//   }
-//   const ci = makeCi(options.apid, options.sender || addr2);
-//   const transferR = await ci.transfer(options.receiver || addr);
-//   if (options.debug) {
-//     console.log(transferR);
-//   }
-//   if (transferR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(transferR.txns, options.sk || sk2);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// interface AirdropSetDelegateOptions {
-//   apid: number;
-//   delegate: string;
-//   simulate?: boolean;
-//   sender?: string;
-// }
-// export const airdropSetDelegate = async (
-//   options: AirdropSetDelegateOptions
-// ) => {
-//   const ci = makeCi(options.apid, options.sender || addr2);
-//   const setDelegateR = await ci.set_delegate(options.delegate || addr);
-//   if (setDelegateR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(setDelegateR.txns, sk2);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// interface AirdropSetVersionOptions {
-//   apid: number;
-//   contractVersion: number;
-//   deploymentVersion: number;
-//   sender?: string;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const airdropSetVersion = async (options: AirdropSetVersionOptions) => {
-//   const ci = makeCi(options.apid, options?.sender || addr);
-//   const setVersionR = await ci.set_version(
-//     options.contractVersion,
-//     options.deploymentVersion
-//   );
-//   if (options.debug) {
-//     console.log(options);
-//     console.log(setVersionR);
-//   }
-//   if (setVersionR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(setVersionR.txns, sk);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// interface AirdropGetStateOptions {
-//   apid: number;
-//   name?: string;
-//   lazy?: boolean;
-// }
-// export const airdropGetState: any = async (options: AirdropGetStateOptions) => {
-//   const globalState = await new AirdropClient(
-//     { resolveBy: "id", id: Number(options.apid) },
-//     algodClient
-//   ).getGlobalState();
-//   if (options.lazy) {
-//     return { globalState };
-//   }
-//   const state = {
-//     contractVersion: globalState.contractVersion?.asNumber(),
-//     deadline: globalState.deadline?.asNumber(),
-//     delegate: algosdk.encodeAddress(
-//       globalState.delegate?.asByteArray() || new Uint8Array()
-//     ),
-//     deployer: algosdk.encodeAddress(
-//       globalState.deployer?.asByteArray() || new Uint8Array()
-//     ),
-//     deploymentVersion: globalState.deploymentVersion?.asNumber(),
-//     distributionCount: globalState.distributionCount?.asNumber(),
-//     distributionSeconds: globalState.distributionSeconds?.asNumber(),
-//     funder: algosdk.encodeAddress(
-//       globalState.funder?.asByteArray() || new Uint8Array()
-//     ),
-//     funding: globalState.funding?.asNumber(),
-//     initial: globalState.initial?.asBigInt().toString(),
-//     lockupDelay: globalState.lockupDelay?.asNumber(),
-//     messengerId: globalState.messengerId?.asNumber(),
-//     owner: algosdk.encodeAddress(
-//       globalState.owner?.asByteArray() || new Uint8Array()
-//     ),
-//     parentId: globalState.parentId?.asNumber(),
-//     period: globalState.period?.asNumber(),
-//     periodLimit: globalState.periodLimit?.asNumber(),
-//     periodSeconds: globalState.periodSeconds?.asNumber(),
-//     stakeable: globalState.stakeable?.asNumber(),
-//     total: globalState.total?.asBigInt().toString(),
-//     updatable: globalState.updatable?.asNumber(),
-//     upgrader: algosdk.encodeAddress(
-//       globalState.upgrader?.asByteArray() || new Uint8Array()
-//     ),
-//     vestingDelay: globalState.vestingDelay?.asNumber(),
-//   };
-//   return state;
-// };
-// airdrop
-//   .command("get")
-//   .description("Get the state of the airdrop contract")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .action(airdropGetState);
-// airdrop
-//   .command("list")
-//   .description("List all airdrop contracts")
-//   .action(async () => {
-//     const {
-//       data: { accounts },
-//     } = await axios.get(
-//       `${arc72IndexerURL}/v1/scs/accounts?parentId=${CTC_INFO_FACTORY_AIRDROP}&deleted=0`
-//     );
-//     for await (const account of accounts) {
-//       console.log(account);
-//     }
-//   });
-// interface AirdropReduceTotalOptions {
-//   apid: number;
-//   amount: number;
-//   simulate?: boolean;
-//   sender?: string;
-// }
-// export const airdropReduceTotal: any = async (
-//   options: AirdropReduceTotalOptions
-// ) => {
-//   const ci = makeCi(Number(options.apid), options.sender || addr);
-//   const reduceR = await ci.reduce_total(Number(options.amount) * 1e6);
-//   if (reduceR.success) {
-//     await signSendAndConfirm(reduceR.txns, sk);
-//     return true;
-//   }
-//   return false;
-// };
-// airdrop
-//   .command("reduce-total <amount>")
-//   .requiredOption("-a, --amount <number>", "Specify the amount to reduce")
-//   .action(airdropReduceTotal);
-// interface AirdropAbortFundingOptions {
-//   apid: number;
-//   simulate?: boolean;
-//   sender?: string;
-//   debug?: boolean;
-// }
-// export const airdropAbortFunding: any = async (
-//   options: AirdropAbortFundingOptions
-// ) => {
-//   const ci = makeCi(Number(options.apid), options.sender || addr);
-//   ci.setFee(3000);
-//   ci.setOnComplete(5); // deleteApplicationOC
-//   const abortR = await ci.abort_funding();
-//   if (options.debug) {
-//     console.log(options);
-//     console.log(abortR);
-//   }
-//   if (abortR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(abortR.txns, sk);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// airdrop
-//   .command("abort-funding")
-//   .description("Abort funding for the airdrop")
-//   .option("-a, --apid <number>", "Specify the application ID")
-//   .action(airdropAbortFunding);
-// airdrop
-//   .command("setup <ownerAddr>")
-//   .description("Setup owner and funder for the contract")
-//   .action(async (ownerAddr) => {
-//     const ci = makeCi(Number(CTC_INFO_AIRDROP), addr);
-//     ci.setPaymentAmount(0.1 * 1e6);
-//     const setupR = await ci.setup(ownerAddr, addr);
-//     console.log(setupR);
-//     const res = await signSendAndConfirm(setupR.txns, sk);
-//     console.log(res);
-//   });
-// // configure the airdrop contract as default owner addr2
-// interface AirdropConfigureOptions {
-//   apid: number;
-//   period: number;
-//   sender?: string;
-//   sk?: any;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const airdropConfigure: any = async (
-//   options: AirdropConfigureOptions
-// ) => {
-//   if (options.debug) {
-//     console.log(options);
-//   }
-//   const ctcInfo = Number(options.apid);
-//   const period = Number(options.period || 0);
-//   const ci = makeCi(ctcInfo, options.sender || addr2);
-//   const configureR = await ci.configure(period);
-//   if (options.debug) {
-//     console.log(configureR);
-//   }
-//   if (configureR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(configureR.txns, options.sk || sk2);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// airdrop
-//   .command("configure")
-//   .description("Configure the lockup period")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .option("-p, --period <number>", "Specify the lockup period")
-//   .option("--debug", "Debug the deployment", false)
-//   .action(airdropConfigure);
-// interface AirdropFillOptions {
-//   apid: number;
-//   amount: number;
-//   simulate?: boolean;
-//   timestamp?: number;
-//   sender?: string;
-//   sk?: any;
-//   debug?: boolean;
-// }
-// export const airdropFill: any = async (options: AirdropFillOptions) => {
-//   if (options.debug) {
-//     console.log(options);
-//   }
-//   const timestamp = Number(options.timestamp || 0);
-//   if (timestamp <= 0) {
-//     const ci = makeCi(Number(options.apid), options.sender || addr);
-//     const paymentAmount = Number(options.amount) * 1e6;
-//     ci.setPaymentAmount(paymentAmount);
-//     const fillR = await ci.fill();
-//     if (options.debug) {
-//       console.log(fillR);
-//     }
-//     if (fillR.success) {
-//       if (!options.simulate) {
-//         await signSendAndConfirm(fillR.txns, options.sk || sk);
-//       }
-//       return true;
-//     }
-//     return false;
-//   } else {
-//     const ci = new CONTRACT(
-//       Number(options.apid),
-//       algodClient,
-//       indexerClient,
-//       abi.custom,
-//       {
-//         addr,
-//         sk: new Uint8Array(0),
-//       }
-//     );
-//     const builder = new CONTRACT(
-//       Number(options.apid),
-//       algodClient,
-//       indexerClient,
-//       makeSpec(AirdropSpec.contract.methods),
-//       {
-//         addr,
-//         sk: new Uint8Array(0),
-//       },
-//       true,
-//       false,
-//       true
-//     );
-//     const buildN = [];
-//     buildN.push({
-//       ...(await builder.fill()).obj,
-//       payment: Number(options.amount) * 1e6,
-//     });
-//     buildN.push({
-//       ...(await builder.set_funding(timestamp)).obj,
-//     });
-//     ci.setFee(1000);
-//     ci.setEnableGroupResourceSharing(true);
-//     ci.setExtraTxns(buildN);
-//     const customR = await ci.custom();
-//     if (options.debug) {
-//       console.log(customR);
-//     }
-//     if (customR.success) {
-//       if (!options.simulate) {
-//         await signSendAndConfirm(customR.txns, sk);
-//       }
-//       return true;
-//     }
-//     return false;
-//   }
-// };
-// airdrop
-//   .command("fill")
-//   .description("Fill the staking contract")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-f, --amount <number>", "Specify the amount to fill")
-//   .option("-s, --simulate", "Simulate the fill", false)
-//   .option("-g --timestamp <number>", "Funding timestamp")
-//   .option("--debug", "Debug the deployment", false)
-//   .action(airdropFill);
-// interface AirdropSetFundingOptions {
-//   apid: number;
-//   timestamp: number;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const airdropSetFunding: any = async (
-//   options: AirdropSetFundingOptions
-// ) => {
-//   if (options.debug) {
-//     console.log(options);
-//   }
-//   const ctcInfo = Number(options.apid);
-//   const timestamp = Number(options.timestamp || 0);
-//   const ci = makeCi(ctcInfo, addr);
-//   const set_fundingR = await ci.set_funding(timestamp);
-//   if (options.debug) {
-//     console.log(set_fundingR);
-//   }
-//   if (set_fundingR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(set_fundingR.txns, sk);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// airdrop
-//   .command("set-funding")
-//   .description("Set the funding timestamp")
-//   .requiredOption("-a, --apid <number>", "Specify the application ID")
-//   .requiredOption("-t, --timestamp <number>", "Specify the timestamp")
-//   .option("--debug", "Debug the deployment", false)
-//   .action(airdropSetFunding);
-// interface AirdropParticipateOptions {
-//   apid: number;
-//   vote_k: Uint8Array[];
-//   sel_k: Uint8Array[];
-//   vote_fst: number;
-//   vote_lst: number;
-//   vote_kd: number;
-//   sp_key: Uint8Array[];
-//   sender?: string;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const airdropParticipate: any = async (
-//   options: AirdropParticipateOptions
-// ) => {
-//   if (options.debug) {
-//     console.log(options);
-//   }
-//   const ctcInfo = Number(options.apid);
-//   const ci = makeCi(ctcInfo, options.sender || addr2);
-//   ci.setPaymentAmount(1000);
-//   const participateR = await ci.participate(
-//     options.vote_k,
-//     options.sel_k,
-//     options.vote_fst,
-//     options.vote_lst,
-//     options.vote_kd,
-//     options.sp_key
-//   );
-//   if (options.debug) {
-//     console.log(options);
-//     console.log(participateR);
-//   }
-//   if (participateR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(participateR.txns, sk2);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// airdrop
-//   .command("participate")
-//   .description("Participate in the airdrop")
-//   .option("-a, --apid <number>", "Specify the application ID")
-//   .option("-k, --vote-k <string>", "Specify the vote key")
-//   .option("-s, --sel-k <string>", "Specify the selection key")
-//   .option("-f, --vote-fst <number>", "Specify the vote first")
-//   .option("-l, --vote-lst <number>", "Specify the vote last")
-//   .option("-d, --vote-kd <number>", "Specify the vote key duration")
-//   .action(airdropParticipate);
-// interface AirdropDepositOptions {
-//   apid: number;
-//   amount: number;
-//   address?: string;
-// }
-// export const airdropDeposit = async (options: AirdropDepositOptions) => {
-//   const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-//     from: options.address || addr2,
-//     to: algosdk.getApplicationAddress(options.apid),
-//     amount: Number(options.amount) * 1e6,
-//     suggestedParams: await algodClient.getTransactionParams().do(),
-//   });
-//   const signedTxn = txn.signTxn(sk2);
-//   const { txId } = await algodClient.sendRawTransaction(signedTxn).do();
-//   const result = await waitForConfirmation(algodClient, txId, 3);
-//   return !result["pool-error"];
-// };
-// interface AirdropWithdrawOptions {
-//   apid: number;
-//   amount: number;
-//   sender?: string;
-//   simulate?: boolean;
-//   debug?: boolean;
-// }
-// export const airdropWithdraw: any = async (options: AirdropWithdrawOptions) => {
-//   const ci = makeCi(Number(options.apid), options.sender || addr2);
-//   const withdrawAmount = Number(options.amount) * 1e6;
-//   ci.setFee(2000);
-//   const withdrawR = await ci.withdraw(withdrawAmount);
-//   if (options.debug) {
-//     console.log(options);
-//     console.log(withdrawR);
-//   }
-//   if (withdrawR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(withdrawR.txns, sk2);
-//     }
-//     return true;
-//   } else {
-//     return false;
-//   }
-// };
-// interface AirdropGetMbOptions {
-//   apid: number;
-//   address: string;
-//   debug?: boolean;
-// }
-// export const airdropGetMb: any = async (options: AirdropGetMbOptions) => {
-//   if (options.debug) {
-//     console.log(options);
-//   }
-//   const ctcInfo = Number(options.apid);
-//   const ci = makeCi(ctcInfo, options.address || addr2);
-//   ci.setFee(2000);
-//   const withdrawR = await ci.withdraw(0);
-//   if (options.debug) {
-//     console.log(withdrawR);
-//   }
-//   if (withdrawR.success) {
-//     const withdraw = withdrawR.returnValue;
-//     return withdraw.toString();
-//   } else {
-//     return "0";
-//   }
-// };
-// airdrop
-//   .command("get-mb")
-//   .description("Simulate owner's withdrawal and log 'mab' value")
-//   .option("-a, --apid <number>", "Specify the application ID")
-//   .option("-d, --address <string>", "Specify the address")
-//   .option("--debug", "Debug the deployment", false)
-//   .action(async (options: AirdropGetMbOptions) => {
-//     const mab = await airdropGetMb(options);
-//     console.log(mab);
-//   });
-// interface AirdropCloseOptions {
-//   apid: number;
-//   simulate?: boolean;
-//   sender?: string;
-//   debug?: boolean;
-// }
-// export const airdropClose: any = async (options: AirdropCloseOptions) => {
-//   if (options.debug) {
-//     console.log(options);
-//   }
-//   const ctcInfo = Number(options.apid);
-//   const ci = makeCi(ctcInfo, options.sender || addr);
-//   ci.setFee(3000);
-//   ci.setOnComplete(5); // deleteApplicationOC
-//   const closeR = await ci.close();
-//   if (options.debug) {
-//     console.log(closeR);
-//   }
-//   if (closeR.success) {
-//     if (!options.simulate) {
-//       await signSendAndConfirm(closeR.txns, sk);
-//     }
-//     return true;
-//   }
-//   return false;
-// };
-// airdrop
-//   .command("close")
-//   .description("Close the airdrop contract")
-//   .option("-a, --apid <number>", "Specify the application ID")
-//   .option("-s, --simulate", "Simulate the close", false)
-//   .option("-d --debug", "Debug the close")
-//   .option("t --sender <string>", "Specify the sender")
-//   .action(airdropClose);
-program.addCommand(vns);
+const rsvp = new Command("rsvp").description("Manage rsvp");
+rsvp
+    .command("kill-application")
+    .description("Kill the rsvp application")
+    .option("-a, --apid <number>", "Specify the application ID")
+    .option("-d, --debug", "Debug the deployment", false)
+    .option("-x, --delete", "Delete the application", false)
+    .option("-s, --simulate", "Simulate the deployment", false)
+    .action(killApplication);
+export const price = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const priceR = await ci.price(options.length);
+    if (options.debug) {
+        console.log(priceR);
+    }
+    return priceR.returnValue;
+};
+rsvp
+    .command("price")
+    .description("Get the price of the rsvp application")
+    .action(price);
+export const reserve = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    if (options.extraPayment) {
+        const amountBI = BigInt(options.extraPayment);
+        ci.setPaymentAmount(Number(amountBI));
+    }
+    const reserveR = await ci.reserve(namehash(options.node), stringToUint8Array(options.name, 256), options.name.length);
+    if (options.debug) {
+        console.log(reserveR);
+    }
+    if (reserveR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(reserveR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const accountNode = async (options) => {
+    if (options.debug) {
+        console.log({ options });
+    }
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const accountNodeR = await ci.account_node(options.account);
+    if (options.debug) {
+        console.log(accountNodeR);
+    }
+    return accountNodeR.returnValue;
+};
+rsvp
+    .command("account-node")
+    .description("Get the account node of the rsvp application")
+    .action(accountNode);
+export const reservationPrice = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const reservationPriceR = await ci.reservation_price(namehash(options.node));
+    if (options.debug) {
+        console.log(reservationPriceR);
+    }
+    return reservationPriceR.returnValue;
+};
+rsvp
+    .command("reservation-price")
+    .description("Get the reservation price of the rsvp application")
+    .action(reservationPrice);
+export const release = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    ci.setFee(2000);
+    const releaseR = await ci.release(namehash(options.node));
+    if (options.debug) {
+        console.log(releaseR);
+    }
+    if (releaseR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(releaseR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+rsvp
+    .command("release")
+    .description("Release the reservation of the rsvp application")
+    .action(release);
+export const killReservation = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const killReservationR = await ci.killReservation(namehash(options.node));
+    if (options.debug) {
+        console.log(killReservationR);
+    }
+    if (killReservationR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(killReservationR.txns, sk);
+        }
+        return true;
+    }
+    return false;
+};
+rsvp
+    .command("kill-reservation")
+    .description("Kill the reservation of the rsvp application")
+    .action(killReservation);
+export const killAccount = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const killAccountR = await ci.killAccount(options.account);
+    if (options.debug) {
+        console.log(killAccountR);
+    }
+    if (killAccountR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(killAccountR.txns, sk);
+        }
+        return true;
+    }
+    return false;
+};
+rsvp
+    .command("kill-account")
+    .description("Kill the account of the rsvp application")
+    .action(killAccount);
+export const rsvpEvents = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, {
+        name: "rsvp",
+        description: "rsvp",
+        methods: VNSRSVPSpec.contract.methods,
+        events: [
+            {
+                name: "ReservationSet",
+                args: [
+                    {
+                        name: "node",
+                        type: "byte[32]",
+                    },
+                    {
+                        name: "owner",
+                        type: "address",
+                    },
+                    {
+                        name: "name",
+                        type: "byte[256]",
+                    },
+                    {
+                        name: "length",
+                        type: "uint64",
+                    },
+                    {
+                        name: "price",
+                        type: "uint64",
+                    },
+                ],
+            },
+            {
+                name: "ReservationReleased",
+                args: [
+                    {
+                        name: "node",
+                        type: "byte[32]",
+                    },
+                ],
+            },
+        ],
+    }, {
+        addr: addr,
+        sk: sk,
+    });
+    const rsvpEventsR = await ci.getEvents({});
+    if (options.debug) {
+        console.log(rsvpEventsR);
+    }
+    return rsvpEventsR;
+};
+rsvp
+    .command("events")
+    .description("Get the events of the rsvp application")
+    .action(rsvpEvents);
+export const adminRelease = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    ci.setFee(2000);
+    const adminReleaseR = await ci.admin_release(options.owner, namehash(options.node));
+    if (options.debug) {
+        console.log(adminReleaseR);
+    }
+    if (adminReleaseR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(adminReleaseR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+rsvp
+    .command("admin-release")
+    .description("Admin release the reservation of the rsvp application")
+    .action(adminRelease);
+export const adminReserve = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const adminReserveR = await ci.admin_reserve(options.owner, namehash(options.node), stringToUint8Array(options.name, 256), options.length, options.price);
+    if (options.debug) {
+        console.log(adminReserveR);
+    }
+    if (adminReserveR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(adminReserveR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+rsvp
+    .command("admin-reserve")
+    .description("Admin reserve the reservation of the rsvp application")
+    .action(adminReserve);
+export const adminReserveBatch = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    if (options.debug) {
+        console.log({ options });
+    }
+    const input = readFileSync(options.input, "utf8");
+    const lines = input.split("\n");
+    for (const line of lines) {
+        const [nfd, addr] = line.split(",");
+        const length = nfd.split(".")[0].length;
+        const cleanAddr = addr.match(/^0x[a-fA-F0-9]{40}$/)?.[0] || addr;
+        const price = 0;
+        const payload = {
+            apid: options.apid,
+            owner: addr,
+            node: nfd,
+            name: nfd,
+            length,
+            price,
+        };
+        console.log(payload);
+        const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRSVPSpec.contract.methods), {
+            addr: address,
+            sk: secretKey,
+        });
+        const adminReserveR = await ci.admin_reserve(cleanAddr, namehash(nfd), stringToUint8Array(nfd, 256), length, price);
+        if (options.debug) {
+            console.log(adminReserveR);
+        }
+        if (!adminReserveR.success) {
+            console.log(`Failed to reserve ${nfd}`);
+            continue;
+        }
+        if (!options.simulate) {
+            await signSendAndConfirm(adminReserveR.txns, secretKey);
+        }
+    }
+};
+rsvp
+    .command("admin-reserve-batch")
+    .description("Admin reserve batch the reservation of the rsvp application")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .requiredOption("-i, --input <path>", "Specify the input file")
+    .option("-d, --debug", "Debug the deployment", false)
+    .option("-s, --simulate", "Simulate the deployment", false)
+    .action(adminReserveBatch);
+rsvp
+    .command("delete-box")
+    .description("Delete a box from the vns registry")
+    .requiredOption("-a, --apid <number>", "Specify the application ID")
+    .requiredOption("-k, --key <string>", "Specify the key")
+    .option("--debug", "Debug the deployment", false)
+    .option("-s, --simulate", "Simulate the deployment", false)
+    .action(deleteBox);
+const resolverCmd = new Command("resolver").description("Manage resolver");
+export const setText = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    ci.setFee(2000);
+    const setTextR = await ci.setText(namehash(options.node), stringToUint8Array(options.key, 22), stringToUint8Array(options.value, 256));
+    if (options.debug) {
+        console.log(setTextR);
+    }
+    if (setTextR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(setTextR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+resolverCmd
+    .command("set-text")
+    .description("Set the text of the resolver")
+    .requiredOption("-a, --apid <number>", "The resolver ID")
+    .requiredOption("-n, --node <string>", "The node to set the text of")
+    .requiredOption("-k, --key <string>", "The key to set the text of")
+    .requiredOption("-v, --value <string>", "The value to set the text of")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await setText(options);
+    console.log(res);
+});
+export const getText = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const getTextR = await ci.text(namehash(options.node), stringToUint8Array(options.key, 22));
+    if (options.debug) {
+        console.log(getTextR);
+    }
+    return stripTrailingZeroBytes(Buffer.from(getTextR.returnValue).toString("utf8"));
+};
+resolverCmd
+    .command("get-text")
+    .description("Get the text of the resolver")
+    .requiredOption("-a, --apid <number>", "The resolver ID")
+    .requiredOption("-n, --node <string>", "The node to get the text of")
+    .requiredOption("-k, --key <string>", "The key to get the text of")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    const res = await getText(options);
+    console.log(res);
+});
+export const resolverUpdate = async (options) => {
+    const apid = Number(options.apid);
+    const res = await new VNSPublicResolverClient({
+        resolveBy: "id",
+        id: apid,
+        sender: {
+            addr,
+            sk,
+        },
+    }, algodClient).appClient.update();
+    if (options.debug) {
+        console.log(res);
+    }
+};
+resolverCmd
+    .command("update")
+    .description("Update the resolver")
+    .requiredOption("-a, --apid <number>", "The resolver ID")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await resolverUpdate(options);
+    console.log(res);
+});
+export const setName = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    ci.setFee(2000);
+    const setNameR = await ci.setName(namehash(options.node), stringToUint8Array(options.name, 256));
+    if (options.debug) {
+        console.log(setNameR);
+    }
+    if (setNameR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(setNameR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+resolverCmd
+    .command("set-name")
+    .description("Set the name of the resolver")
+    .requiredOption("-a, --apid <number>", "The resolver ID")
+    .requiredOption("-n, --node <string>", "The node to set the name of")
+    .requiredOption("-d, --name <string>", "The name to set")
+    .option("-e, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await setName(options);
+    console.log(res);
+});
+export const deleteName = async (options) => {
+    if (options.debug) {
+        console.log({ options });
+    }
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    ci.setFee(2000);
+    const deleteNameR = await ci.deleteName(namehash(options.node));
+    if (options.debug) {
+        console.log(deleteNameR);
+    }
+    if (deleteNameR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(deleteNameR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const getName = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const node = namehash(options.node);
+    const getNameR = await ci.name(namehash(options.node));
+    if (options.debug) {
+        console.log("node", Buffer.from(node).toString("hex"));
+        console.log(getNameR);
+    }
+    if (getNameR.success) {
+        return getNameR.returnValue;
+    }
+    return "";
+};
+resolverCmd
+    .command("get-name")
+    .description("Get the name of the resolver")
+    .requiredOption("-a, --apid <number>", "The resolver ID")
+    .requiredOption("-n, --node <string>", "The node to get the name of")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    const res = await getName(options);
+    console.log(stripTrailingZeroBytes(Buffer.from(res).toString("utf8")));
+});
+export const setAddr = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    ci.setFee(2000);
+    const setAddrR = await ci.setAddr(namehash(options.node), options.addr);
+    if (options.debug) {
+        console.log(setAddrR);
+    }
+    if (setAddrR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(setAddrR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const killAddr = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const killAddrR = await ci.deleteAddr(namehash(options.node));
+    if (options.debug) {
+        console.log(killAddrR);
+    }
+    if (killAddrR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(killAddrR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const resolveName = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const resolveNameR = await ci.name(namehash(options.node));
+    if (options.debug) {
+        console.log(resolveNameR);
+    }
+    if (resolveNameR.success) {
+        return resolveNameR.returnValue;
+    }
+    return "";
+};
+export const resolveAddr = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const resolveAddrR = await ci.addr(namehash(options.node));
+    if (options.debug) {
+        console.log(resolveAddrR);
+    }
+    return resolveAddrR.returnValue;
+};
+const registrarCmd = new Command("registrar").description("Manage registrar");
+export const registrarSetName = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    ci.setFee(4000);
+    const registrarSetNameR = await ci.setName(stringToUint8Array(options.name, 256));
+    if (options.debug) {
+        console.log(registrarSetNameR);
+    }
+    if (registrarSetNameR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(registrarSetNameR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("set-name")
+    .description("Set the name of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-n, --name <string>", "The name to set")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await registrarSetName(options);
+    console.log(res);
+});
+export const setCostMultiplier = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const costMultiplier = Number(options.costMultiplier);
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const setCostMultiplierR = await ci.set_cost_multiplier(costMultiplier);
+    if (options.debug) {
+        console.log(setCostMultiplierR);
+    }
+    if (setCostMultiplierR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(setCostMultiplierR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("set-cost-multiplier")
+    .description("Set the cost multiplier of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-c, --cost-multiplier <number>", "The cost multiplier")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await setCostMultiplier(options);
+    console.log(res);
+});
+export const setBaseCost = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const baseCost = Number(options.baseCost) * 1e6;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const setBaseCostR = await ci.set_base_cost(baseCost);
+    if (options.debug) {
+        console.log(setBaseCostR);
+    }
+    if (setBaseCostR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(setBaseCostR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("set-base-cost")
+    .description("Set the base cost of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-b, --base-cost <number>", "The base cost")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await setBaseCost(options);
+    console.log(res);
+});
+export const vnsRegistrarGetLength = async (options) => {
+    if (options.debug) {
+        console.log({ options });
+    }
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const vnsRegistrarGetLengthR = await ci.get_length(stringToUint8Array(options.name, 32));
+    if (options.debug) {
+        console.log(vnsRegistrarGetLengthR);
+    }
+    return vnsRegistrarGetLengthR.returnValue;
+};
+registrarCmd
+    .command("get-length")
+    .description("Get the length of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-n, --name <string>", "The name to get the length of")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    const res = await vnsRegistrarGetLength(options);
+    console.log(res);
+});
+export const vnsRegistrarSetRootNode = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const vnsRegistrarSetRootNodeR = await ci.set_root_node(namehash(options.rootNode));
+    if (options.debug) {
+        console.log(vnsRegistrarSetRootNodeR);
+    }
+    if (vnsRegistrarSetRootNodeR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(vnsRegistrarSetRootNodeR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("set-root-node")
+    .description("Set the root node of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-n, --root-node <string>", "The root node to set")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await vnsRegistrarSetRootNode(options);
+    console.log(res);
+});
+export const vnsRegistrarSetPaymentToken = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const vnsRegistrarSetPaymentTokenR = await ci.set_payment_token(Number(options.paymentToken));
+    if (options.debug) {
+        console.log(vnsRegistrarSetPaymentTokenR);
+    }
+    if (vnsRegistrarSetPaymentTokenR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(vnsRegistrarSetPaymentTokenR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("set-payment-token")
+    .description("Set the payment token of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-p, --payment-token <number>", "The payment token ID")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await vnsRegistrarSetPaymentToken(options);
+    console.log(res);
+});
+export const vnsRegistrarUpdate = async (options) => {
+    const apid = Number(options.apid);
+    const res = await new VNSRegistrarClient({
+        resolveBy: "id",
+        id: apid,
+        sender: {
+            addr,
+            sk,
+        },
+    }, algodClient).appClient.update();
+    if (options.debug) {
+        console.log(res);
+    }
+};
+registrarCmd
+    .command("update")
+    .description("Update the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await vnsRegistrarUpdate(options);
+    console.log(res);
+});
+export const vnsRegistrarPostUpdate = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const vnsRegistrarPostUpdateR = await ci.post_update(Number(options.registry), namehash(options.rootNode), Number(options.paymentToken));
+    if (options.debug) {
+        console.log(vnsRegistrarPostUpdateR);
+    }
+    if (vnsRegistrarPostUpdateR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(vnsRegistrarPostUpdateR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("post-update")
+    .description("Post update the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-r, --registry <number>", "The registry ID")
+    .requiredOption("-n, --root-node <string>", "The root node to set")
+    .requiredOption("-p, --payment-token <number>", "The payment token ID")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await vnsRegistrarPostUpdate(options);
+    console.log(res);
+});
+export const isExpired = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const isExpiredR = await ci.is_expired(uint8ArrayToBigInt(namehash(options.name)));
+    if (options.debug) {
+        console.log("isExpiredR", isExpiredR);
+    }
+    return isExpiredR.returnValue;
+};
+export const register = async (options) => {
+    if (options.debug) {
+        console.log({ options });
+    }
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, abi.custom, {
+        addr: address,
+        sk: secretKey,
+    });
+    const builder = {
+        arc200: new CONTRACT(780596, algodClient, indexerClient, abi.nt200, {
+            addr: address,
+            sk: secretKey,
+        }, true, false, true),
+        registrar: new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+            addr: address,
+            sk: secretKey,
+        }, true, false, true),
+        resolver: new CONTRACT(797608, algodClient, indexerClient, makeSpec(VNSPublicResolverSpec.contract.methods), {
+            addr: address,
+            sk: secretKey,
+        }, true, false, true),
+    };
+    const buildN = [];
+    {
+        const txnO = (await builder.arc200.arc200_approve(algosdk.getApplicationAddress(797609), 1000e6))?.obj;
+        buildN.push({
+            ...txnO,
+            payment: 28500,
+        });
+    }
+    {
+        const txnO = (await builder.registrar.register(stringToUint8Array(options.name, 32), options.owner, Number(options.duration) * 365 * 24 * 60 * 60 // Convert years to seconds
+        ))?.obj;
+        buildN.push({
+            ...txnO,
+            payment: 336700,
+        });
+    }
+    {
+        const txnO = (await builder.resolver.setName(namehash(`${options.name}.voi`), stringToUint8Array(`${options.name}.voi`, 256)))?.obj;
+        buildN.push({
+            ...txnO,
+        });
+    }
+    ci.setFee(15000);
+    ci.setBeaconId(Number(options.apid));
+    ci.setEnableGroupResourceSharing(true);
+    ci.setExtraTxns(buildN);
+    const customR = await ci.custom();
+    if (options.debug) {
+        console.log(customR);
+    }
+    if (customR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(customR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("register")
+    .description("Register a name")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-n, --name <string>", "The name to register")
+    .requiredOption("-o, --owner <string>", "The owner of the name")
+    .requiredOption("-d, --duration <number>", "The duration of the registration")
+    .option("-e, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await register(options);
+    console.log(res);
+});
+export const deleteNFTData = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const deleteNFTDataR = await ci.deleteNFTData(uint8ArrayToBigInt(namehash(options.name)));
+    if (options.debug) {
+        console.log("deleteNFTDataR", deleteNFTDataR);
+    }
+    if (deleteNFTDataR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(deleteNFTDataR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const deleteNFTIndex = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const deleteNFTIndexR = await ci.deleteNFTIndex(options.index);
+    if (options.debug) {
+        console.log("deleteNFTIndexR", deleteNFTIndexR);
+    }
+    if (deleteNFTIndexR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(deleteNFTIndexR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const deleteHolderData = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const deleteHolderDataR = await ci.deleteHolderData(options.address);
+    if (options.debug) {
+        console.log("deleteHolderDataR", deleteHolderDataR);
+    }
+    if (deleteHolderDataR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(deleteHolderDataR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const deleteExpires = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const deleteExpiresR = await ci.deleteExpires(uint8ArrayToBigInt(namehash(options.name)));
+    if (options.debug) {
+        console.log("deleteExpiresR", deleteExpiresR);
+    }
+    if (deleteExpiresR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(deleteExpiresR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const getPrice = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const getPriceR = await ci.get_price(stringToUint8Array(options.name, 32), options.duration);
+    return getPriceR.returnValue;
+};
+export const getLength = async (options) => {
+    if (options.debug) {
+        console.log({ options });
+    }
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const getLengthR = await ci.get_length(stringToUint8Array(options.name, 32));
+    if (options.debug) {
+        console.log("getLengthR", getLengthR);
+    }
+    return getLengthR.returnValue;
+};
+export const checkName = async (options) => {
+    try {
+        if (options.debug) {
+            console.log({ options });
+        }
+        const address = options.sender || addr;
+        const secretKey = options.sk || sk;
+        const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+            addr: address,
+            sk: secretKey,
+        });
+        ci.setFee(15000);
+        const checkNameR = await ci.check_name(stringToUint8Array(options.name, 32));
+        if (options.debug) {
+            console.log("checkNameR", checkNameR);
+        }
+        return checkNameR.returnValue;
+    }
+    catch (e) {
+        return false;
+    }
+};
+export const renew = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    ci.setFee(2000);
+    ci.setPaymentAmount(100000);
+    const renewR = await ci.renew(options.name, options.duration);
+    if (options.debug) {
+        console.log("renewR", renewR);
+    }
+    if (renewR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(renewR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const expiration = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const expirationR = await ci.expiration(uint8ArrayToBigInt(namehash(options.name)));
+    return expirationR.returnValue;
+};
+export const reclaim = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    ci.setFee(2000);
+    const reclaimR = await ci.reclaim(stringToUint8Array(options.name, 32));
+    if (options.debug) {
+        console.log("reclaimR", reclaimR);
+    }
+    if (reclaimR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(reclaimR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+const stakingCmd = new Command("staking").description("Manage staking registrar");
+export const stakingRegister = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, abi.custom, {
+        addr: address,
+        sk: secretKey,
+    });
+    const builder = {
+        stakingRegistrar: new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(StakingRegistrarSpec.contract.methods), {
+            addr: address,
+            sk: secretKey,
+        }, true, false, true),
+    };
+    const buildN = [];
+    {
+        const txnO = (await builder.stakingRegistrar.register(bigIntToUint8Array(BigInt(options.stakingId)), address, 0)).obj;
+        buildN.push({ ...txnO, apps: [Number(options.stakingId)] });
+    }
+    ci.setFee(2000);
+    ci.setPaymentAmount(284000);
+    ci.setExtraTxns(buildN);
+    ci.setEnableGroupResourceSharing(true);
+    const customR = await ci.custom();
+    if (options.debug) {
+        console.log("customR", customR);
+    }
+    if (customR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(customR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+stakingCmd
+    .command("register")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-t, --staking-id <number>", "The staking ID")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await stakingRegister(options);
+    console.log(res);
+});
+export const stakingUpdate = async (options) => {
+    if (options.debug) {
+        console.log("options", options);
+    }
+    const apid = Number(options.apid);
+    const res = await new StakingRegistrarClient({
+        resolveBy: "id",
+        id: apid,
+        sender: {
+            addr,
+            sk,
+        },
+    }, algodClient).appClient.update();
+    if (options.debug) {
+        console.log(res);
+    }
+};
+stakingCmd
+    .command("update")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await stakingUpdate(options);
+    console.log(res);
+});
+const collectionCmd = new Command("collection").description("Manage collection registrar");
+export const collectionUpdate = async (options) => {
+    if (options.debug) {
+        console.log("options", options);
+    }
+    const apid = Number(options.apid);
+    const res = await new CollectionRegistrarClient({
+        resolveBy: "id",
+        id: apid,
+        sender: {
+            addr,
+            sk,
+        },
+    }, algodClient).appClient.update();
+    if (options.debug) {
+        console.log(res);
+    }
+};
+collectionCmd
+    .command("update")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await collectionUpdate(options);
+    console.log(res);
+});
+export const collectionRegister = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, abi.custom, {
+        addr: address,
+        sk: secretKey,
+    });
+    const builder = {
+        collectionRegistrar: new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(CollectionRegistrarSpec.contract.methods), {
+            addr: address,
+            sk: secretKey,
+        }, true, false, true),
+    };
+    const buildN = [];
+    {
+        const txnO = (await builder.collectionRegistrar.register(bigIntToUint8Array(BigInt(options.collectionId)), address, 0)).obj;
+        buildN.push({
+            ...txnO,
+            apps: [Number(options.collectionId)],
+        });
+    }
+    ci.setFee(2000);
+    ci.setEnableGroupResourceSharing(true);
+    ci.setExtraTxns(buildN);
+    const customR = await ci.custom();
+    if (options.debug) {
+        console.log("customR", customR);
+    }
+    if (customR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(customR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+collectionCmd
+    .command("register")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-c, --collection-id <number>", "The collection ID")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await collectionRegister(options);
+    console.log(res);
+});
+const reverseCmd = new Command("reverse").description("Manage reverse registrar");
+export const reverseSetRootNode = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(ReverseRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const reverseSetRootNodeR = await ci.set_root_node(namehash(options.rootNode));
+    if (options.debug) {
+        console.log("reverseSetRootNodeR", reverseSetRootNodeR);
+    }
+    if (reverseSetRootNodeR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(reverseSetRootNodeR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+reverseCmd
+    .command("set-root-node")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-r, --root-node <string>", "The root node to set")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await reverseSetRootNode(options);
+    console.log(res);
+});
+export const reverseSetRegistry = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(ReverseRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const reverseSetRegistryR = await ci.set_registry(Number(options.registry));
+    if (options.debug) {
+        console.log("reverseSetRegistryR", reverseSetRegistryR);
+    }
+    if (reverseSetRegistryR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(reverseSetRegistryR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+reverseCmd
+    .command("set-registry")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-r, --registry <number>", "The registry to set")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await reverseSetRegistry(options);
+    console.log(res);
+});
+export const reverseSetPaymentToken = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(ReverseRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const reverseSetPaymentTokenR = await ci.set_payment_token(Number(options.token));
+    if (options.debug) {
+        console.log("reverseSetPaymentTokenR", reverseSetPaymentTokenR);
+    }
+    if (reverseSetPaymentTokenR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(reverseSetPaymentTokenR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+reverseCmd
+    .command("set-payment-token")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-t, --token <number>", "The token to set")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await reverseSetPaymentToken(options);
+    console.log(res);
+});
+export const reverseRegisterUpdate = async (options) => {
+    if (options.debug) {
+        console.log("options", options);
+    }
+    const apid = Number(options.apid);
+    const res = await new ReverseRegistrarClient({
+        resolveBy: "id",
+        id: apid,
+        sender: {
+            addr,
+            sk,
+        },
+    }, algodClient).appClient.update();
+    if (options.debug) {
+        console.log(res);
+    }
+};
+reverseCmd
+    .command("update")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await reverseRegisterUpdate(options);
+    console.log(res);
+});
+export const reverseRegister = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, abi.custom, {
+        addr: address,
+        sk: secretKey,
+    });
+    const builder = {
+        arc200: new CONTRACT(Number(options.papid), algodClient, indexerClient, makeSpec(OSARC200TokenSpec.contract.methods), {
+            addr: address,
+            sk: secretKey,
+        }, true, false, true),
+        reverseRegistrar: new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(ReverseRegistrarSpec.contract.methods), {
+            addr: address,
+            sk: secretKey,
+        }, true, false, true),
+    };
+    const buildN = [];
+    {
+        const txnO = (await builder.arc200.arc200_approve(algosdk.getApplicationAddress(Number(options.apid)), 1e6)).obj;
+        buildN.push({
+            ...txnO,
+            payment: 28500,
+        });
+    }
+    {
+        const txnO = (await builder.reverseRegistrar.register(algosdk.decodeAddress(options.owner).publicKey, options.owner, Number(options.duration))).obj;
+        buildN.push({
+            ...txnO,
+            payment: 336700,
+        });
+    }
+    ci.setBeaconId(Number(options.apid));
+    ci.setFee(3000);
+    ci.setEnableGroupResourceSharing(true);
+    ci.setExtraTxns(buildN);
+    const customR = await ci.custom();
+    if (options.debug) {
+        console.log("customR", customR);
+    }
+    if (customR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(customR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+reverseCmd
+    .command("register")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-p, --papid <number>", "The ARC200 contract ID")
+    .requiredOption("-o, --owner <string>", "The owner to register")
+    .requiredOption("-d, --duration <number>", "The duration to register")
+    .option("-e, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await reverseRegister(options);
+    console.log(res);
+});
+export const reverseCheckName = async (options) => {
+    if (options.debug) {
+        console.log({ options });
+    }
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(ReverseRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const reverseCheckNameR = await ci.check_name(options.name);
+    if (options.debug) {
+        console.log("reverseCheckNameR", reverseCheckNameR);
+    }
+    if (reverseCheckNameR.success) {
+        return reverseCheckNameR.returnValue;
+    }
+    return false;
+};
+reverseCmd
+    .command("check-name")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-n, --name <string>", "The name to check")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await reverseCheckName({
+        ...options,
+        apid: Number(options.apid),
+        name: algosdk.decodeAddress(options.name).publicKey,
+    });
+    console.log(res);
+});
+export const reverseGetLength = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(ReverseRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const getLengthReverseR = await ci.get_length();
+    return getLengthReverseR.returnValue;
+};
+export const registerReverse = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(ReverseRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const registerReverseR = await ci.register(stringToUint8Array(options.name, 58));
+    if (options.debug) {
+        console.log("registerReverseR", registerReverseR);
+    }
+    if (registerReverseR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(registerReverseR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+export const registrarWithdraw = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    //ci.setPaymentAmount(2e6);
+    ci.setFee(4000);
+    const withdrawR = await ci.withdraw();
+    if (options.debug) {
+        console.log("withdrawR", withdrawR);
+    }
+    if (withdrawR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(withdrawR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+const arc72Cmd = new Command("arc72").description("Manage ARC72");
+export const arc72OwnerOf = async (options) => {
+    if (options.debug) {
+        console.log({ options });
+    }
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const nodeId = namehash(options.name);
+    const tokenId = uint8ArrayToBigInt(nodeId);
+    const mtid = BigInt("0x" + Buffer.from(nodeId).toString("hex"));
+    console.log("tokenId", tokenId);
+    console.log("mtid", mtid);
+    const arc72OwnerOfR = await ci.arc72_ownerOf(mtid);
+    if (options.debug) {
+        console.log("arc72OwnerOfR", arc72OwnerOfR);
+    }
+    return arc72OwnerOfR.returnValue;
+};
+arc72Cmd
+    .command("owner-of")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-n, --name <string>", "The name to get the owner of")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await arc72OwnerOf(options);
+    console.log(res);
+});
+export const arc72TransferFrom = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const arc72TransferFromR = await ci.arc72_transferFrom(options.from, options.to, uint8ArrayToBigInt(namehash(options.name)));
+    if (options.debug) {
+        console.log("arc72TransferFromR", arc72TransferFromR);
+    }
+    if (arc72TransferFromR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(arc72TransferFromR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+program.command("whoami").action(async () => {
+    console.log(addresses.deployer);
+});
+program.addCommand(utilCmd);
+program.addCommand(reverseCmd);
+program.addCommand(collectionCmd);
+program.addCommand(registrarCmd);
+program.addCommand(stakingCmd);
+program.addCommand(arc72Cmd);
+program.addCommand(arc200Cmd);
+program.addCommand(resolverCmd);
+program.addCommand(vnsCmd);
+program.addCommand(rsvp);
 //program.addCommand(arc200);
 // program.addCommand(factory);

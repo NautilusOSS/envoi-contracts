@@ -1,0 +1,17 @@
+## update reverse registrar
+# node main.js reverse update --apid 797610 
+## register new node
+# node main.js reverse register --apid 797610 --owner BRB3JP4LIW5Q755FJCGVAOA4W3THJ7BR3K6F26EVCGMETLEAZOQRHHJNLQ --duration 0 --papid 780596 --debug 
+## set reverse registrar root node
+# node main.js reverse set-root-node --apid 797610 --root-node addr.reverse --simulate --debug
+## get registrar owner of node
+# node main.js arc72 owner-of --apid 797610 --name BRB3JP4LIW5Q755FJCGVAOA4W3THJ7BR3K6F26EVCGMETLEAZOQRHHJNLQ.addr.reverse
+# node main.js arc72 owner-of --apid 797610 --name BRB3JP4LIW5Q755FJCGVAOA4W3THJ7BR3K6F26EVCGMETLEAZOQRHHJNLQ.reverse
+# node main.js arc72 owner-of --apid 797607 --name nshell.voi
+## get name
+# node main.js resolver get-name --apid 797608 --node BRB3JP4LIW5Q755FJCGVAOA4W3THJ7BR3K6F26EVCGMETLEAZOQRHHJNLQ.addr.reverse
+# node main.js resolver get-name --apid 797608 --node G3MSA75OZEJTCCENOJDLDJK7UD7E2K5DNC7FVHCNOV7E3I4DTXTOWDUIFQ.addr.reverse
+## set name
+# node main.js resolver set-name --apid 797608 --node BRB3JP4LIW5Q755FJCGVAOA4W3THJ7BR3K6F26EVCGMETLEAZOQRHHJNLQ.addr.reverse --name shelly.voi --debug
+### registrar
+# node main.js vns ownerOf --apid 797607 --node nshell.voi

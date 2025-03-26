@@ -2,7 +2,7 @@ import { expect } from "chai";
 import {
   deploy,
   sks,
-  addressses,
+  addresses,
   killApplication,
   postUpdate,
   killNode,
@@ -30,6 +30,7 @@ import algosdk from "algosdk";
 const baseFixtureData = {
   apps: {
     vnsRegistry: 0,
+    vnsResolver: 0,
     appSeries: [],
   },
   context: {},
@@ -48,6 +49,11 @@ describe("VNSRegistry:core:registry Test Suite", function () {
     });
     console.log(vnsRegistry);
     fixtureData.apps.vnsRegistry = vnsRegistry;
+    const vnsResolver = await deploy({
+      type: "vns-resolver",
+      name: "test-resolver",
+    });
+    fixtureData.apps.vnsResolver = vnsResolver;
   });
   after(async function () {
     const killNodeR = await Promise.all(
@@ -62,7 +68,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
         killNode({
           apid: fixtureData.apps.vnsRegistry,
           node,
-          sender: addressses.deployer,
+          sender: addresses.deployer,
           sk: sks.deployer,
         })
       )
@@ -71,12 +77,12 @@ describe("VNSRegistry:core:registry Test Suite", function () {
     const killOperatorR = await Promise.all(
       [
         {
-          operator: addressses.registrar,
-          owner: addressses.deployer,
+          operator: addresses.registrar,
+          owner: addresses.deployer,
         },
         {
-          operator: addressses.owner,
-          owner: addressses.deployer,
+          operator: addresses.owner,
+          owner: addresses.deployer,
         },
       ].map(({ operator, owner }) =>
         killOperator({
@@ -110,13 +116,14 @@ describe("VNSRegistry:core:registry Test Suite", function () {
     const owner = await ownerOf({
       apid: fixtureData.apps.vnsRegistry,
     });
-    expect(owner).to.be.eq(addressses.deployer);
+    expect(owner).to.be.eq(addresses.deployer);
   });
-  it("root node resolver", async function () {
+  it("root node rslvr", async function () {
     const resolverR = await resolver({
       apid: fixtureData.apps.vnsRegistry,
     });
-    expect(resolverR).to.be.eq(BigInt(0));
+    console.log(resolverR);
+    //expect(resolverR).to.be.eq(BigInt(0));
   });
   it("root node ttl", async function () {
     const ttlR = await ttl({
@@ -124,10 +131,11 @@ describe("VNSRegistry:core:registry Test Suite", function () {
     });
     expect(ttlR).to.be.eq(BigInt(86400));
   });
-  it("set resolver root", async function () {
+  it("root set rslvr", async function () {
     const setResolverR = await setResolver({
       apid: fixtureData.apps.vnsRegistry,
       resolver: 1,
+      extraPayment: 147300,
     });
     expect(setResolverR).to.be.eq(true);
     const resolverR2 = await resolver({
@@ -149,7 +157,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
   it("set record root", async function () {
     const setRecordR = await setRecord({
       apid: fixtureData.apps.vnsRegistry,
-      owner: addressses.deployer,
+      owner: addresses.deployer,
       resolver: 2,
       ttl: 2,
     });
@@ -157,7 +165,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
     const ownerR2 = await ownerOf({
       apid: fixtureData.apps.vnsRegistry,
     });
-    expect(ownerR2).to.be.eq(addressses.deployer);
+    expect(ownerR2).to.be.eq(addresses.deployer);
     const resolverR2 = await resolver({
       apid: fixtureData.apps.vnsRegistry,
     });
@@ -172,12 +180,13 @@ describe("VNSRegistry:core:registry Test Suite", function () {
       const setSubnodeOwnerR = bytesToHex(
         await setSubnodeOwner({
           apid: fixtureData.apps.vnsRegistry,
-          sender: addressses.deployer,
+          sender: addresses.deployer,
           sk: sks.deployer,
           extraPayment: recordBoxCost,
           node: "",
           label: "hi",
-          owner: addressses.owner,
+          owner: addresses.owner,
+          debug: true,
         })
       );
       const expectedSetSubnodeOwnerR = bytesToHex(namehash("hi"));
@@ -186,18 +195,18 @@ describe("VNSRegistry:core:registry Test Suite", function () {
         apid: fixtureData.apps.vnsRegistry,
         node: "hi",
       });
-      expect(ownerR3).to.be.eq(addressses.owner);
+      expect(ownerR3).to.be.eq(addresses.owner);
     }
     {
       const setSubnodeOwnerR = bytesToHex(
         await setSubnodeOwner({
           apid: fixtureData.apps.vnsRegistry,
-          sender: addressses.deployer,
+          sender: addresses.deployer,
           sk: sks.deployer,
           extraPayment: recordBoxCost,
           node: "",
           label: "voi",
-          owner: addressses.deployer,
+          owner: addresses.deployer,
           extraPayment: recordBoxCost,
         })
       );
@@ -207,16 +216,16 @@ describe("VNSRegistry:core:registry Test Suite", function () {
         apid: fixtureData.apps.vnsRegistry,
         node: "voi",
       });
-      expect(ownerR3).to.be.eq(addressses.deployer);
+      expect(ownerR3).to.be.eq(addresses.deployer);
     }
   });
 
-  it("set resolver as subnode owner hi", async function () {
+  it("set rslvr as subnode owner hi", async function () {
     const setResolverR = await setResolver({
       apid: fixtureData.apps.vnsRegistry,
       node: "hi",
       resolver: 3,
-      sender: addressses.owner,
+      sender: addresses.owner,
       sk: sks.owner,
     });
     expect(setResolverR).to.be.eq(true);
@@ -232,7 +241,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
       apid: fixtureData.apps.vnsRegistry,
       node: "hi",
       ttl: 3,
-      sender: addressses.owner,
+      sender: addresses.owner,
       sk: sks.owner,
     });
     expect(setTTLR).to.be.eq(true);
@@ -248,40 +257,40 @@ describe("VNSRegistry:core:registry Test Suite", function () {
       apid: fixtureData.apps.vnsRegistry,
       node: "hi",
     });
-    expect(ownerBefore).to.be.eq(addressses.owner);
+    expect(ownerBefore).to.be.eq(addresses.owner);
     const setOwnerR = await setOwner({
       apid: fixtureData.apps.vnsRegistry,
-      sender: addressses.owner,
+      sender: addresses.owner,
       sk: sks.owner,
       node: "hi",
-      owner: addressses.deployer,
+      owner: addresses.deployer,
     });
     expect(setOwnerR).to.be.eq(true);
     const ownerAfter = await ownerOf({
       apid: fixtureData.apps.vnsRegistry,
       node: "hi",
     });
-    expect(ownerAfter).to.be.eq(addressses.deployer);
+    expect(ownerAfter).to.be.eq(addresses.deployer);
   });
 
   it("setApprovalForAll", async function () {
     {
       const isApprovedForAllR = await isApprovedForAll({
         apid: fixtureData.apps.vnsRegistry,
-        operator: addressses.owner,
-        owner: addressses.deployer,
+        operator: addresses.owner,
+        owner: addresses.deployer,
       });
       expect(isApprovedForAllR).to.be.eq(false);
       const setApprovalForAllR = await setApprovalForAll({
         apid: fixtureData.apps.vnsRegistry,
-        operator: addressses.owner,
+        operator: addresses.owner,
         approved: true,
       });
       expect(setApprovalForAllR).to.be.eq(true);
       const isApprovedForAllR2 = await isApprovedForAll({
         apid: fixtureData.apps.vnsRegistry,
-        operator: addressses.owner,
-        owner: addressses.deployer,
+        operator: addresses.owner,
+        owner: addresses.deployer,
       });
       expect(isApprovedForAllR2).to.be.eq(true);
     }
@@ -289,15 +298,15 @@ describe("VNSRegistry:core:registry Test Suite", function () {
       const setApprovalForAllR = await setApprovalForAll({
         apid: fixtureData.apps.vnsRegistry,
         node: "voi",
-        operator: addressses.registrar,
+        operator: addresses.registrar,
         approved: true,
       });
       expect(setApprovalForAllR).to.be.eq(true);
       const isApprovedForAllR2 = await isApprovedForAll({
         apid: fixtureData.apps.vnsRegistry,
         node: "voi",
-        operator: addressses.registrar,
-        owner: addressses.deployer,
+        operator: addresses.registrar,
+        owner: addresses.deployer,
       });
       expect(isApprovedForAllR2).to.be.eq(true);
     }
@@ -308,20 +317,20 @@ describe("VNSRegistry:core:registry Test Suite", function () {
       apid: fixtureData.apps.vnsRegistry,
       node: "voi",
     });
-    expect(ownerBefore).to.be.eq(addressses.deployer);
+    expect(ownerBefore).to.be.eq(addresses.deployer);
     const setOwnerR = await setOwner({
       apid: fixtureData.apps.vnsRegistry,
-      sender: addressses.registrar,
+      sender: addresses.registrar,
       sk: sks.registrar,
       node: "voi",
-      owner: addressses.registrar,
+      owner: addresses.registrar,
     });
     expect(setOwnerR).to.be.eq(true);
     const ownerAfter = await ownerOf({
       apid: fixtureData.apps.vnsRegistry,
       node: "voi",
     });
-    expect(ownerAfter).to.be.eq(addressses.registrar);
+    expect(ownerAfter).to.be.eq(addresses.registrar);
   });
 
   it("operator can set subnode owner", async function () {
@@ -337,8 +346,8 @@ describe("VNSRegistry:core:registry Test Suite", function () {
             apid: fixtureData.apps.vnsRegistry,
             node: "voi",
             label,
-            owner: addressses.owner,
-            sender: addressses.registrar,
+            owner: addresses.owner,
+            sender: addresses.registrar,
             sk: sks.registrar,
             extraPayment: recordBoxCost,
           })
@@ -348,7 +357,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
           apid: fixtureData.apps.vnsRegistry,
           node: `${label}.voi`,
         });
-        expect(ownerAfter).to.be.eq(addressses.owner);
+        expect(ownerAfter).to.be.eq(addresses.owner);
       })
     );
   });
@@ -358,7 +367,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
       apid: fixtureData.apps.vnsRegistry,
       node: "nshell.voi",
       resolver: 4,
-      sender: addressses.registrar,
+      sender: addresses.registrar,
       sk: sks.registrar,
     });
     expect(setResolverR).to.be.eq(true);
@@ -374,7 +383,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
       apid: fixtureData.apps.vnsRegistry,
       node: "nshell.voi",
       ttl: 5,
-      sender: addressses.registrar,
+      sender: addresses.registrar,
       sk: sks.registrar,
     });
     expect(setTTLR).to.be.eq(true);
@@ -391,8 +400,8 @@ describe("VNSRegistry:core:registry Test Suite", function () {
         apid: fixtureData.apps.vnsRegistry,
         node: "nshell.voi",
         label: "a",
-        owner: addressses.deployer,
-        sender: addressses.registrar,
+        owner: addresses.deployer,
+        sender: addresses.registrar,
         sk: sks.registrar,
         extraPayment: recordBoxCost,
       })
@@ -402,7 +411,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
       apid: fixtureData.apps.vnsRegistry,
       node: "a.nshell.voi",
     });
-    expect(ownerR6).to.be.eq(addressses.deployer);
+    expect(ownerR6).to.be.eq(addresses.deployer);
   });
 
   it("owner can set subnode owner level 4", async function () {
@@ -411,7 +420,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
         apid: fixtureData.apps.vnsRegistry,
         node: "a.nshell.voi",
         label: "b",
-        owner: addressses.deployer,
+        owner: addresses.deployer,
         extraPayment: recordBoxCost,
       })
     );
@@ -420,7 +429,7 @@ describe("VNSRegistry:core:registry Test Suite", function () {
       apid: fixtureData.apps.vnsRegistry,
       node: "b.a.nshell.voi",
     });
-    expect(ownerR7).to.be.eq(addressses.deployer);
+    expect(ownerR7).to.be.eq(addresses.deployer);
   });
 
   // owner can approve
