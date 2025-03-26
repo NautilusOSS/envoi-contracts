@@ -1,7 +1,7 @@
-OpenSubmarine | Contracts
+Envoi Naming Service | Contracts
 
-A library for secure smart contract development. Build on a solid foundation of community-vetted code similar to OpenZeppelin but for the Algorand Virtual Machine (AVM) and using Algorand Python instead of Solidity. Testing is done using Algorand Pythnon Testing and Mocha and Chai frameworks.
 
+Core smart contracts for enVoi Naming Service. Build on a solid foundation of code similar to OpenSubmarine but for the Algorand Virtual Machine (AVM) and using Algorand Python. Testing is done using Algorand Pythnon Testing and Mocha and Chai frameworks.
+
+* Implementations of naming service core contracts.
 * Implementations of standards like ARC200 and ARC72.
-* Flexible role-based permissioning scheme.
-* Reusable Algorand python components to build custom contracts and complex decentralized systems.
