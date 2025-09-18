@@ -14,7 +14,7 @@ arc72-build-artifacts() {
   cp -v artifacts/CollectionRegistrarClient.ts ./src/scripts/clients/
   cp -v artifacts/StakingRegistrarClient.ts ./src/scripts/clients/
 }
-arc72-build-all() {
+build-all() {
   arc72-build-image && arc72-build-artifacts
 }
 arc72-cli() {
