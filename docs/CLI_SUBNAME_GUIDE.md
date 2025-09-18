@@ -153,7 +153,23 @@ node main.js vns owner-of --apid 797607 --node shelly.founder.voi
 
 ### 5. Use Resolver
 
-After reclaiming the subname, you can use the resolver to set and get text values:
+After reclaiming the subname, you can use the resolver to set and get name and text values:
+
+#### 5.0 Set Name
+
+Set the name record for the subname (797608 is the resolver app ID):
+
+```bash
+node main.js resolver set-name --apid 797608 --node shelly.founder.voi --name shelly.founder.voi
+```
+
+#### 5.0 Get Name
+
+Retrieve the name record from the subname:
+
+```bash
+node main.js resolver get-name --apid 797608 --node shelly.founder.voi
+```
 
 #### 5.1 Set Text Value
 
