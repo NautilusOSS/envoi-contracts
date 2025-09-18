@@ -284,7 +284,7 @@ utilCmd
 });
 export const utilNamehash = async (options) => {
     const namehashR = namehash(options.name);
-    return namehashR;
+    return Buffer.from(namehashR).toString("hex");
 };
 utilCmd
     .command("namehash")
@@ -1066,7 +1066,14 @@ vnsCmd
     .command("set-owner")
     .description("Set the owner of the vns registry")
     .requiredOption("-a, --apid <number>", "Specify the application ID")
-    .action(setOwner);
+    .requiredOption("-n, --node <string>", "Specify the node")
+    .requiredOption("-o, --owner <string>", "Specify the owner")
+    .option("-s, --simulate", "Simulate the set owner", false)
+    .option("-d, --debug", "Debug the deployment", false)
+    .action(async (options) => {
+    const res = await setOwner(options);
+    console.log(res);
+});
 export const setApprovalForAll = async (options) => {
     const address = options.sender || addr;
     const secretKey = options.sk || sk;
@@ -1636,6 +1643,152 @@ export const resolveAddr = async (options) => {
     return resolveAddrR.returnValue;
 };
 const registrarCmd = new Command("registrar").description("Manage registrar");
+export const registrarSetVersion = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const registrarSetVersionR = await ci.set_version(BigInt(options.contractVersion), BigInt(options.deploymentVersion));
+    if (options.debug) {
+        console.log(registrarSetVersionR);
+    }
+    if (registrarSetVersionR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(registrarSetVersionR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("set-version")
+    .description("Set the version of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-c, --contract-version <number>", "The contract version")
+    .requiredOption("-e, --deployment-version <number>", "The deployment version")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await registrarSetVersion(options);
+    console.log(res);
+});
+export const registrarApproveController = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const registrarApproveControllerR = await ci.approve_controller(options.controller, options.approved ?? false);
+    if (options.debug) {
+        console.log(registrarApproveControllerR);
+    }
+    if (registrarApproveControllerR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(registrarApproveControllerR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("approve-controller")
+    .description("Approve a controller")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-c, --controller <string>", "The controller to approve")
+    .option("--approved", "The approval status")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await registrarApproveController(options);
+    console.log(res);
+});
+export const registrarIsController = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const registrarIsControllerR = await ci.is_controller(options.controller);
+    if (options.debug) {
+        console.log(registrarIsControllerR);
+    }
+    return registrarIsControllerR.returnValue;
+};
+registrarCmd
+    .command("is-controller")
+    .description("Check if an address is a controller")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-c, --controller <string>", "The controller to check")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    const res = await registrarIsController(options);
+    console.log(res);
+});
+export const registrarSetGracePeriod = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    const registrarSetGracePeriodR = await ci.set_grace_period(BigInt(options.gracePeriod));
+    if (options.debug) {
+        console.log(registrarSetGracePeriodR);
+    }
+    if (registrarSetGracePeriodR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(registrarSetGracePeriodR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("set-grace-period")
+    .description("Set the grace period of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-g, --grace-period <number>", "The grace period")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await registrarSetGracePeriod(options);
+    console.log(res);
+});
+export const registrarMint = async (options) => {
+    const address = options.sender || addr;
+    const secretKey = options.sk || sk;
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: address,
+        sk: secretKey,
+    });
+    ci.setFee(15000);
+    ci.setPaymentAmount(273600);
+    const registrarMintR = await ci.mint(options.to, stringToUint8Array(options.name, 32));
+    if (options.debug) {
+        console.log(registrarMintR);
+    }
+    if (registrarMintR.success) {
+        if (!options.simulate) {
+            await signSendAndConfirm(registrarMintR.txns, secretKey);
+        }
+        return true;
+    }
+    return false;
+};
+registrarCmd
+    .command("mint")
+    .description("Mint a new registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-t, --to <string>", "The address to mint to")
+    .requiredOption("-l, --name <string>", "The node name")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await registrarMint(options);
+    console.log(res);
+});
 export const registrarSetName = async (options) => {
     const address = options.sender || addr;
     const secretKey = options.sk || sk;
@@ -1781,6 +1934,48 @@ registrarCmd
     .option("-s, --simulate", "Simulate the transaction")
     .action(async (options) => {
     const res = await vnsRegistrarSetRootNode(options);
+    console.log(res);
+});
+export const vnsRegistrarGetRootNode = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const vnsRegistrarGetRootNodeR = await ci.get_root_node();
+    return vnsRegistrarGetRootNodeR.returnValue;
+};
+registrarCmd
+    .command("get-root-node")
+    .description("Get the root node name of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    const res = await vnsRegistrarGetRootNode(options);
+    const nid = Buffer.from(res).toString("hex");
+    const tid = BigInt("0x" + nid);
+    console.log("res", res);
+    console.log("nid", nid);
+    console.log("tid", tid.toString());
+});
+export const vnsRegistrarGetRootNodeName = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    ci.setFee(15000);
+    const vnsRegistrarGetRootNodeNameR = await ci.get_root_node_name();
+    if (options.debug) {
+        console.log({ vnsRegistrarGetRootNodeNameR });
+    }
+    return stripTrailingZeroBytes(Buffer.from(vnsRegistrarGetRootNodeNameR.returnValue).toString("utf-8"));
+};
+registrarCmd
+    .command("get-root-node-name")
+    .description("Get the root node name of the registrar")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    const res = await vnsRegistrarGetRootNodeName(options);
     console.log(res);
 });
 export const vnsRegistrarSetPaymentToken = async (options) => {
@@ -2104,6 +2299,15 @@ export const expiration = async (options) => {
     const expirationR = await ci.expiration(uint8ArrayToBigInt(namehash(options.name)));
     return expirationR.returnValue;
 };
+registrarCmd
+    .command("expiration")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-n, --name <string>", "The node name")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    const res = await expiration(options);
+    console.log(res);
+});
 export const reclaim = async (options) => {
     const address = options.sender || addr;
     const secretKey = options.sk || sk;
@@ -2124,6 +2328,44 @@ export const reclaim = async (options) => {
     }
     return false;
 };
+registrarCmd
+    .command("reclaim")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-n, --name <string>", "The node name")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    const res = await reclaim(options);
+    console.log(res);
+});
+export const getAppId = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrySpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const ownerOfR = (await ci.ownerOf(namehash(options.name)));
+    if (options.debug) {
+        console.log("ownerOfR", ownerOfR);
+    }
+    const nodeOwner = ownerOfR.returnValue;
+    const accInfo = await indexerClient.lookupAccountByID(nodeOwner).do();
+    const block = await indexerClient.lookupBlock(accInfo.account["created-at-round"]).do();
+    const applicationTransaction = block.transactions.find((txn) => txn["tx-type"] === "appl" && algosdk.getApplicationAddress(txn["application-transaction"]["application-id"]) === nodeOwner);
+    if (!applicationTransaction) {
+        return 0;
+    }
+    const appId = applicationTransaction["application-transaction"]["application-id"];
+    return appId;
+};
+registrarCmd
+    .command("get-app-id")
+    .requiredOption("-a, --apid <number>", "The VNS registry ID")
+    .requiredOption("-n, --name <string>", "The name to get the app ID of")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    const res = await getAppId(options);
+    console.log(res);
+});
 const stakingCmd = new Command("staking").description("Manage staking registrar");
 export const stakingRegister = async (options) => {
     const address = options.sender || addr;
@@ -2320,6 +2562,17 @@ export const reverseSetRegistry = async (options) => {
     }
     return false;
 };
+registrarCmd
+    .command("set-registry")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-r, --registry <number>", "The registry to set")
+    .option("-d, --debug", "Debug mode")
+    .option("-s, --simulate", "Simulate the transaction")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await reverseSetRegistry(options);
+    console.log(res);
+});
 reverseCmd
     .command("set-registry")
     .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
@@ -2549,6 +2802,16 @@ export const arc72OwnerOf = async (options) => {
     }
     return arc72OwnerOfR.returnValue;
 };
+registrarCmd
+    .command("owner-of")
+    .requiredOption("-a, --apid <number>", "The registrar ID")
+    .requiredOption("-n, --name <string>", "The name to get the owner of")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await arc72OwnerOf(options);
+    console.log(res);
+});
 arc72Cmd
     .command("owner-of")
     .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
@@ -2557,6 +2820,32 @@ arc72Cmd
     .action(async (options) => {
     console.log({ options });
     const res = await arc72OwnerOf(options);
+    console.log(res);
+});
+export const arc72TokenURI = async (options) => {
+    const ci = new CONTRACT(Number(options.apid), algodClient, indexerClient, makeSpec(VNSRegistrarSpec.contract.methods), {
+        addr: addr,
+        sk: sk,
+    });
+    const tid = uint8ArrayToBigInt(namehash(options.name));
+    if (options.debug) {
+        console.log("tid", tid.toString());
+    }
+    ci.setFee(15000);
+    const arc72TokenURIR = await ci.arc72_tokenURI(tid);
+    if (options.debug) {
+        console.log("arc72TokenURIR", arc72TokenURIR);
+    }
+    return Buffer.from(arc72TokenURIR.returnValue).toString("utf-8");
+};
+arc72Cmd
+    .command("token-uri")
+    .requiredOption("-a, --apid <number>", "The ARC72 contract ID")
+    .requiredOption("-n, --name <string>", "The name to get the token URI of")
+    .option("-d, --debug", "Debug mode")
+    .action(async (options) => {
+    console.log({ options });
+    const res = await arc72TokenURI(options);
     console.log(res);
 });
 export const arc72TransferFrom = async (options) => {
