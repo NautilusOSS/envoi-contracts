@@ -297,4 +297,3 @@ For technical support and questions:
 ---
 
 **Built with ❤️ for the Algorand ecosystem**
->>>>>>> 38cb8d1 (feat: Major VNS system overhaul with enhanced CLI and contract improvements)
