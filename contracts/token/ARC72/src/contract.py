@@ -3160,7 +3160,10 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
 
     @arc4.abimethod
     def is_controller(self, controller: arc4.Address) -> arc4.Bool:
-        return arc4.Bool(self.controllers.get(controller.native, default=False))
+        return arc4.Bool(
+            self.controllers.get(controller.native, default=False)
+            or controller.native == self.owner
+        )
 
     @arc4.abimethod
     def get_length(self, name: Bytes32) -> arc4.UInt64:
@@ -3806,7 +3809,6 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
             base_uri.bytes.length + tailing_bytes.length == 256
         ), "base uri and tailing bytes must be 256 bytes"
         return box_b.get(default=Bytes256.from_bytes(base_uri.bytes + tailing_bytes))
-
 
     @arc4.abimethod
     def set_tokenURI(self, tokenId: arc4.UInt256, tokenURI: Bytes256) -> None:

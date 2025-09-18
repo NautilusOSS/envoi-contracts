@@ -2343,14 +2343,17 @@ export const getAppId = async (options) => {
         addr: addr,
         sk: sk,
     });
-    const ownerOfR = (await ci.ownerOf(namehash(options.name)));
+    const ownerOfR = await ci.ownerOf(namehash(options.name));
     if (options.debug) {
         console.log("ownerOfR", ownerOfR);
     }
     const nodeOwner = ownerOfR.returnValue;
-    const accInfo = await indexerClient.lookupAccountByID(nodeOwner).do();
-    const block = await indexerClient.lookupBlock(accInfo.account["created-at-round"]).do();
-    const applicationTransaction = block.transactions.find((txn) => txn["tx-type"] === "appl" && algosdk.getApplicationAddress(txn["application-transaction"]["application-id"]) === nodeOwner);
+    const accInfo = await indexerClient
+        .searchForTransactions()
+        .address(nodeOwner)
+        .do();
+    const applicationTransaction = accInfo.transactions.find((txn) => txn["tx-type"] === "appl" &&
+        algosdk.getApplicationAddress(txn["application-transaction"]["application-id"]) === nodeOwner);
     if (!applicationTransaction) {
         return 0;
     }
