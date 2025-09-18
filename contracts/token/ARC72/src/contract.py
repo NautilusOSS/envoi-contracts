@@ -3059,7 +3059,7 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         self.owner = Global.creator_address  # owner address
         # upgradeable state
         self.contract_version = UInt64(1)  # contract version
-        self.deployment_version = UInt64(1)  # deployment version
+        self.deployment_version = UInt64(2)  # deployment version
         self.updatable = bool(1)  # updatable
         self.upgrader = Global.creator_address  # upgrader address
         # stakeable state
@@ -3072,7 +3072,7 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
     ) -> None:
         assert Txn.sender == self.upgrader, "sender must be upgrader"
         self.contract_version = UInt64(1)  # contract version
-        self.deployment_version = UInt64(1)  # deployment version
+        self.deployment_version = UInt64(2)  # deployment version
 
     # arc72 methods
 
