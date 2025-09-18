@@ -63,12 +63,6 @@ Set the registrar as the owner of the root domain in the VNS registry (797607 is
 node main.js vns set-owner --apid 797607 --node founder.voi --owner JLP2X7HEH3AJZ7IXE7AHNC2QAXG3PKUQMXZFGHTO4V3Y5EKFGIWC6BETTA
 ```
 
-Get the registrar's application ID:
-
-```bash
-node main.js registrar get-app-id --apid 797607 --name founder.voi
-```
-
 This should return the registrar's app ID (e.g., `45291944`).
 
 #### 2.1 Set Registry Reference
@@ -222,3 +216,13 @@ After successfully creating a subname, you can:
 
 - [Main Documentation](../index.md) - Overview of the VNS system
 - [Registrar Documentation](REGISTRAR.md) - Detailed registrar contract information
+
+## Additional Commands
+
+### Get Registrar Application ID
+
+To retrieve the registrar's application ID for a specific domain:
+
+```bash
+node main.js registrar get-app-id --apid 797607 --name founder.voi
+```
