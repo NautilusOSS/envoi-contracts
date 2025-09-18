@@ -5,6 +5,129 @@ All notable changes to the OpenSubmarine ARC72 VNS project will be documented in
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2025-09-18
+
+### 🎯 Subname Registration & Enhanced Management Release
+
+This release introduces comprehensive subname registration capabilities, NFT minting functionality, and enhanced name management features, significantly expanding the VNS system's capabilities.
+
+### Added
+
+#### Subname Registration System
+- **Dynamic Subname Registration**
+  - Support for hierarchical subname creation (e.g., `subdomain.domain.voi`)
+  - Dynamic parent domain resolution from URL parameters
+  - Automatic payment token detection based on parent domain
+  - Support for non-.voi domains and custom TLDs
+
+#### Enhanced Name Management
+- **NFT Minting Functionality**
+  - Controller-based NFT minting for name owners
+  - MintModal component for streamlined minting process
+  - Integration with ARC72 NFT standard for domain tokens
+
+- **Default Name Management**
+  - "Set as Default" feature for primary identity management
+  - ConfirmSetDefaultModal for setting primary domain
+  - Enhanced user experience for name prioritization
+
+#### Improved User Interface
+- **Enhanced ProfilePage Components**
+  - New ConfirmSetDefaultModal for setting primary identity
+  - Improved MintModal for controller-based NFT minting
+  - Enhanced TransferModal with better UX and validation
+  - Better dark mode styling and UI consistency
+
+- **Dynamic Registration Flow**
+  - New route support for subname registration (`/register/:name/:subname`)
+  - Dynamic parent name resolution from URL parameters
+  - Automatic payment token selection per parent domain
+  - Improved registration workflow for subnames
+
+#### Technical Enhancements
+- **Client Library Improvements**
+  - Refactored VNSRegistrarClient with enhanced functionality
+  - Updated ConnectWallet component with better error handling
+  - Enhanced useNameRegistration hook with new features
+  - Improved parameter validation and error handling
+
+- **Multi-Token Support**
+  - Support for multiple payment tokens based on parent domain
+  - Dynamic token selection during registration
+  - Enhanced payment processing for different domain types
+
+### Changed
+
+#### Registration System Updates
+- **Breaking Changes**
+  - RegisterName component now supports subname registration via URL params
+  - Payment token selection is now dynamic based on parent domain
+  - Enhanced registration flow for hierarchical domains
+
+#### User Interface Improvements
+- Enhanced dark mode styling across all components
+- Improved modal components with better UX
+- Better error handling and user feedback
+- Streamlined registration process for subnames
+
+### Fixed
+
+#### Bug Fixes
+- Improved error handling in ConnectWallet component
+- Enhanced parameter validation in registration flow
+- Better UI consistency across dark/light modes
+- Fixed edge cases in subname registration process
+
+### Security
+
+#### Enhanced Validation
+- Improved input validation for subname registration
+- Better parameter sanitization in URL-based registration
+- Enhanced security in payment token selection
+
+### Performance
+
+#### Optimization Improvements
+- Streamlined subname registration process
+- Improved client library performance
+- Better memory usage in registration operations
+- Enhanced UI responsiveness
+
+### Breaking Changes
+
+#### Registration Flow Changes
+- RegisterName now supports subname registration via URL params
+- Payment token selection is now dynamic based on parent domain
+- Enhanced parameter requirements for subname registration
+
+### Migration Guide
+
+#### For Frontend Users
+- Update registration URLs to support subname parameters
+- Review payment token selection logic for dynamic domains
+- Test subname registration flow in development environment
+
+#### For Contract Users
+- Review subname registration implementation
+- Update client code for enhanced registration functionality
+- Test multi-token payment scenarios
+
+### Dependencies
+
+#### Updated Dependencies
+- Enhanced client libraries for subname support
+- Updated UI components for better UX
+- Improved error handling libraries
+
+### Known Issues
+
+#### Resolved Issues
+- Fixed subname registration edge cases
+- Improved error handling in registration flow
+- Enhanced UI consistency across components
+
+---
+
 ## [1.1.0] - 2025-01-17
 
 ### 🚀 Major System Enhancement Release
@@ -462,6 +585,14 @@ This release marks the first stable version of OpenSubmarine ARC72 VNS, a compre
 ---
 
 ## Version History
+
+- **v1.1.1**: Subname registration & enhanced management release
+  - Comprehensive subname registration capabilities
+  - NFT minting functionality for name controllers
+  - Enhanced name management with "Set as Default" feature
+  - Dynamic payment token support based on parent domain
+  - Improved UI components and dark mode styling
+  - Enhanced client libraries and error handling
 
 - **v1.1.0**: Major system enhancement release
   - Enhanced VNS Registrar contract with controller management
