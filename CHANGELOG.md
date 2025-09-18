@@ -5,6 +5,175 @@ All notable changes to the OpenSubmarine ARC72 VNS project will be documented in
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-01-17
+
+### 🚀 Major System Enhancement Release
+
+This release represents a significant enhancement to the VNS (Voi Name Service) system, introducing new functionality, improved usability, and comprehensive documentation updates.
+
+### Added
+
+#### Enhanced VNS Registrar Contract
+- **Controller Management System**
+  - `approve_controller(address, bool)` - Fine-grained access control for controllers
+  - `is_controller(address)` - Check controller approval status
+  - Enhanced security and permission management
+
+- **Improved Domain Management**
+  - `get_root_node()` - Retrieve root node information
+  - `get_root_node_name()` - Get root node name
+  - `get_registry()` - Get registry address
+  - `get_payment_token()` - Get payment token ID
+  - Enhanced domain lifecycle visibility
+
+- **Treasury and Configuration Management**
+  - `set_grace_period(uint64)` - Configurable grace period for expired domains
+  - `set_treasury(address)` - Treasury address management for fee collection
+  - `set_version(uint64, uint64)` - Contract version management
+  - Better administrative controls
+
+- **Simplified Operations**
+  - Streamlined `mint(address, byte[32])` - Simplified domain minting with cleaner parameters
+  - Simplified `post_update()` - Streamlined update method signature
+  - Enhanced `set_tokenURI(uint256, byte[256])` - Improved metadata management
+
+#### Expanded CLI Tooling
+- **New Registrar Commands**
+  - `set-version` - Contract version management
+  - `approve-controller` / `is-controller` - Controller access management
+  - `set-grace-period` - Grace period configuration
+  - `mint` - Simplified domain minting
+  - `get-root-node` / `get-root-node-name` - Root node information
+  - `expiration` / `reclaim` - Domain lifecycle management
+  - `get-app-id` - Application ID resolution
+  - `set-registry` / `owner-of` - Registry operations
+  - `token-uri` - ARC72 metadata access
+
+- **Enhanced Command Features**
+  - Improved error handling and debug output
+  - Better parameter validation
+  - Enhanced simulation mode support
+  - Comprehensive help documentation
+
+#### Comprehensive Documentation Overhaul
+- **Complete README Rewrite**
+  - Professional documentation with usage examples
+  - Architecture overview and quick start guide
+  - Comprehensive feature descriptions
+  - API reference and examples
+
+- **New Documentation Suite**
+  - `docs/index.md` - Complete system overview
+  - `docs/REGISTRAR.md` - Detailed registrar documentation  
+  - `docs/CLI_SUBNAME_GUIDE.md` - Step-by-step CLI usage guide
+
+- **Enhanced Documentation Features**
+  - Detailed usage examples and parameter descriptions
+  - Complete subname creation workflow documentation
+  - Troubleshooting guides and best practices
+  - Code examples and integration guides
+
+#### Technical Improvements
+- **Updated Client Libraries**
+  - All TypeScript client interfaces updated to match contract changes
+  - JavaScript client libraries synchronized
+  - Enhanced type safety and parameter validation
+  - Improved error handling throughout
+
+- **Code Quality Enhancements**
+  - Refactored client code for better maintainability
+  - Improved parameter validation and type checking
+  - Enhanced debug output and error reporting
+  - Better code organization and documentation
+
+### Changed
+
+#### Contract Method Signatures
+- **Breaking Changes**
+  - `mint()` method signature simplified (removed `nodeName` parameter)
+  - `post_update()` method signature streamlined (removed parameters)
+  - Some CLI command parameters updated for consistency
+
+#### CLI Command Updates
+- Enhanced parameter validation across all commands
+- Improved error messages and debug output
+- Better simulation mode support
+- Updated help documentation
+
+#### Documentation Structure
+- Complete README overhaul with professional formatting
+- Enhanced documentation organization
+- Improved code examples and usage patterns
+- Better cross-referencing between documents
+
+### Fixed
+
+#### Bug Fixes
+- Improved error handling in CLI commands
+- Enhanced parameter validation
+- Better type safety in client libraries
+- Fixed edge cases in domain management operations
+
+### Security
+
+#### Access Control Improvements
+- Enhanced controller management system
+- Better permission validation
+- Improved security in administrative functions
+- Enhanced treasury management security
+
+### Performance
+
+#### Optimization Improvements
+- Streamlined contract method signatures
+- Improved client library performance
+- Enhanced CLI command execution speed
+- Better memory usage in client operations
+
+### Breaking Changes
+
+#### Contract Changes
+- `mint(address, byte[32], string)` → `mint(address, byte[32])` - Removed `nodeName` parameter
+- `post_update(uint64, byte[32], uint64)` → `post_update()` - Simplified signature
+
+#### CLI Changes
+- Some command parameters may have changed - see updated documentation
+- Enhanced parameter validation may require updated command usage
+
+### Migration Guide
+
+#### For Contract Users
+- Update client code to use new method signatures
+- Review controller management implementation
+- Update administrative function calls
+
+#### For CLI Users
+- Review updated command documentation
+- Update scripts using modified commands
+- Test commands in simulation mode first
+
+### Dependencies
+
+#### Updated Dependencies
+- Enhanced TypeScript client libraries
+- Updated JavaScript client libraries
+- Improved CLI tooling dependencies
+
+### Known Issues
+
+#### Resolved Issues
+- Fixed parameter validation edge cases
+- Improved error handling in CLI commands
+- Enhanced type safety in client libraries
+
+### Deprecations
+
+#### Deprecated Features
+- Old `mint()` method signature (use new simplified version)
+- Old `post_update()` method signature (use new simplified version)
+
+---
+
 ## [1.0.0] - 2025-01-XX
 
 ### 🎉 Initial Release - Complete Decentralized Naming System
@@ -293,6 +462,13 @@ This release marks the first stable version of OpenSubmarine ARC72 VNS, a compre
 ---
 
 ## Version History
+
+- **v1.1.0**: Major system enhancement release
+  - Enhanced VNS Registrar contract with controller management
+  - Expanded CLI tooling with new registrar commands
+  - Comprehensive documentation overhaul
+  - Improved client libraries and type safety
+  - Better error handling and debug capabilities
 
 - **v1.0.0**: Initial stable release with complete VNS functionality
   - Full ARC72 NFT integration
