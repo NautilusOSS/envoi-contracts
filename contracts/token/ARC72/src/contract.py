@@ -3071,8 +3071,21 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         self,
     ) -> None:
         assert Txn.sender == self.upgrader, "sender must be upgrader"
-        self.contract_version = UInt64(1)  # contract version
-        self.deployment_version = UInt64(2)  # deployment version
+        self.contract_version = UInt64(1)
+        self.deployment_version = UInt64(3)
+
+    # owneable methods
+
+    @subroutine
+    def _only_owner(self) -> None:
+        """
+        Only the owner can call this method
+        """
+        assert Txn.sender == self.owner, "only owner"
+
+    @arc4.abimethod
+    def get_owner(self) -> arc4.Address:
+        return arc4.Address(self.owner)
 
     # arc72 methods
 
@@ -3084,6 +3097,20 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         """
         return arc4.Address(self._ownerOf(tokenId.native))
 
+    @arc4.abimethod
+    def arc72_admin_transfer(self, tokenId: arc4.UInt256, to: arc4.Address) -> None:
+        """
+        Transfer the NFT to the given address (owner only)
+        """
+        self._only_owner()
+        self._admin_transfer(tokenId.native, to.native)
+
+    @subroutine
+    def _admin_transfer(self, tokenId: BigUInt, to: Account) -> None:
+        owner = self._ownerOf(tokenId)
+        self._transferFrom(owner, to, tokenId)
+
+    # override
     @subroutine
     def _ownerOf(self, tokenId: BigUInt) -> Account:
         expiration = self._expiration(tokenId)
@@ -3095,6 +3122,34 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
             return Global.current_application_address
         # Otherwise, domain is owned by NFT owner
         return self._nft_owner(tokenId).native
+
+    # override
+    @subroutine
+    def _transferFrom(
+        self, sender: Account, recipient: Account, tokenId: BigUInt
+    ) -> None:
+        assert self._nft_index(tokenId) != 0, "token id not exists"
+        owner = self._ownerOf(tokenId)
+        assert owner == sender, "sender must be owner"
+        assert (
+            Txn.sender == sender
+            or Txn.sender == Account.from_bytes(self._getApproved(tokenId).bytes)
+            or self._isApprovedForAll(Account.from_bytes(owner.bytes), Txn.sender) 
+            or Txn.sender == self.owner # allow owner to transfer to any address
+        ), "sender must be owner or approved"
+        nft = self.nft_data.get(key=tokenId, default=self._invalid_nft_data()).copy()
+        nft.owner = arc4.Address(recipient)
+        nft.approved = arc4.Address(Global.zero_address)
+        self.nft_data[tokenId] = nft.copy()
+        self._holder_increment_balance(recipient)
+        self._holder_decrement_balance(sender)
+        arc4.emit(
+            arc72_Transfer(
+                arc4.Address(sender),
+                arc4.Address(recipient),
+                arc4.UInt256(tokenId),
+            )
+        )
 
     # expiration methods
 
@@ -3211,41 +3266,6 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
             )
         )
 
-    # @arc4.abimethod
-    # def register_unit(
-    #     self, name: Bytes32, owner: arc4.Address, duration: arc4.UInt256
-    # ) -> Bytes32:
-    #     "Register a new name with UNIT"
-    #     assert self.check_name(name).native, "name must be valid"
-    #     payment_token = UInt64(420069)  # UNIT
-    #     unit = BigUInt(5_000_000_000)  # 50 UNIT (decimal 8)
-    #     return Bytes32.from_bytes(
-    #         self._register(
-    #             String.from_bytes(name.bytes[: self.get_length(name).native]),
-    #             owner.native,
-    #             duration.native,
-    #             payment_token,
-    #             unit,
-    #         )
-    #     )
-
-    # @arc4.abimethod
-    # def register_ausd(
-    #     self, name: Bytes32, owner: arc4.Address, duration: arc4.UInt256
-    # ) -> Bytes32:
-    #     "Register a new name with aUSDC"
-    #     payment_token = UInt64(395614)  # aUSDC
-    #     unit = BigUInt(5_000_000)  # 5 aUSDC
-    #     return Bytes32.from_bytes(
-    #         self._register(
-    #             String.from_bytes(name.bytes[: self.get_length(name).native]),
-    #             owner.native,
-    #             duration.native,
-    #             payment_token,
-    #             unit,
-    #         )
-    #     )
-
     # ------------------------------------------------------------
     # Register a new name (internal)
     # - validate registration
@@ -3299,13 +3319,14 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         # requires allowance from Txn.sender to this contract
 
         registration_fee = self._get_price(unit, name.bytes, duration)
-        arc4.abi_call(
+        success, txn = arc4.abi_call(
             ARC200Token.arc200_transferFrom,
             arc4.Address(Txn.sender),
             arc4.Address(self.treasury),
             arc4.UInt256(registration_fee),
             app_id=Application(payment_token),
         )
+        assert success, "transfer failed"
         # ------------------------------------------------------------
 
         # ------------------------------------------------------------
@@ -3665,92 +3686,12 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
             )
         )
 
-    # @arc4.abimethod
-    # def get_price_unit(self, name: Bytes32, duration: arc4.UInt256) -> arc4.UInt256:
-    #     """Calculate total price for registration/renewal"""
-    #     unit = BigUInt(5_000_000_000)  # 50 UNIT
-    #     return arc4.UInt256(
-    #         self._get_price(
-    #             unit,
-    #             name.bytes[: self._get_length(name.bytes)],
-    #             duration.native,
-    #         )
-    #     )
-
-    # @arc4.abimethod
-    # def get_price_ausd(self, name: Bytes32, duration: arc4.UInt256) -> arc4.UInt256:
-    #     """Calculate total price for registration/renewal"""
-    #     unit = BigUInt(5_000_000)  # 5 aUSDC
-    #     return arc4.UInt256(
-    #         self._get_price(
-    #             unit,
-    #             name.bytes[: self._get_length(name.bytes)],
-    #             duration.native,
-    #         )
-    #     )
-
     @subroutine
     def _get_price(self, unit: BigUInt, name: Bytes, duration: BigUInt) -> BigUInt:
         """Calculate total price for registration/renewal"""
         base = self._base_cost(unit, name.length)
         years = duration // self.base_period
         return base * years
-
-    # terminal methods
-
-    # @arc4.abimethod(allow_actions=[OnCompleteAction.DeleteApplication])
-    # def killApplication(self) -> None:
-    #     """
-    #     Kill contract
-    #     """
-    #     assert Txn.sender == self.upgrader, "must be upgrader"
-    #     close_offline_on_delete(Txn.sender)
-
-    # @arc4.abimethod
-    # def deleteNFTData(self, token_id: arc4.UInt256) -> None:
-    #     self._deleteNFTData(token_id.native)
-
-    # @subroutine
-    # def _deleteNFTData(self, token_id: BigUInt) -> None:
-    #     del self.nft_data[token_id]
-
-    # @arc4.abimethod
-    # def deleteNFTOperators(self, label: arc4.UInt256) -> None:
-    #     self._deleteNFTOperators(label.native)
-
-    # @subroutine
-    # def _deleteNFTOperators(self, label: BigUInt) -> None:
-    #     del self.nft_operators[label.bytes]
-
-    # @arc4.abimethod
-    # def deleteNFTIndex(self, index: arc4.UInt256) -> None:
-    #     self._deleteNFTIndex(index.native)
-
-    # @subroutine
-    # def _deleteNFTIndex(self, index: BigUInt) -> None:
-    #     del self.nft_index[index]
-
-    # @arc4.abimethod
-    # def deleteHolderData(self, holder: arc4.Address) -> None:
-    #     self._deleteHolderData(holder.native)
-
-    # @subroutine
-    # def _deleteHolderData(self, holder: Account) -> None:
-    #     del self.holder_data[holder]
-
-    # @arc4.abimethod
-    # def deleteExpires(self, token_id: arc4.UInt256) -> None:
-    #     self._deleteExpires(token_id.native)
-
-    # @subroutine
-    # def _deleteExpires(self, token_id: BigUInt) -> None:
-    #     del self.expires[token_id]
-
-    # @arc4.abimethod
-    # def deleteBox(self, key: Bytes) -> None:
-    #     assert Txn.sender == self.upgrader, "must be upgrader"
-    #     box = BoxRef(key=key)
-    #     box.delete()
 
     # admin methods
 
@@ -3885,8 +3826,8 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         self.payment_token = token.native
 
     # resolver methods
-    # setName
-    # setText
+    #   setName
+    #   setText
 
     @arc4.abimethod
     def setName(self, name: Bytes256) -> None:
@@ -3903,6 +3844,25 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
             VNSNameResolver.setName,
             self.root_node,
             name,
+            app_id=Application(resolver.native),
+        )
+
+    @arc4.abimethod
+    def setText(self, key: Bytes22, value: Bytes256) -> None:
+        """
+        Set the text record for the name
+        """
+        assert Txn.sender == self.owner, "only owner"
+        resolver, txn = arc4.abi_call(
+            VNS.resolver,
+            self.root_node,
+            app_id=Application(self.registry),
+        )
+        arc4.abi_call(
+            VNSTextResolver.setText,
+            self.root_node,
+            key,
+            value,
             app_id=Application(resolver.native),
         )
 

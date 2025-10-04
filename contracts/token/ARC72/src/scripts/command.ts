@@ -2599,6 +2599,7 @@ export const deleteName: any = async (
 interface VNSResolverGetNameOptions {
   apid: number;
   node: string;
+  nodeHash?: string;
   debug?: boolean;
 }
 
@@ -2614,7 +2615,12 @@ export const getName: any = async (options: VNSResolverGetNameOptions) => {
     }
   );
   const node = namehash(options.node);
-  const getNameR = await ci.name(namehash(options.node));
+  const getNameR = await ci.name(
+    options.nodeHash
+      ? new Uint8Array(Buffer.from(options.nodeHash, "hex"))
+      : namehash(options.node)
+  );
+  console.log("getNameR", getNameR);
   if (options.debug) {
     console.log("node", Buffer.from(node).toString("hex"));
     console.log(getNameR);
@@ -3419,9 +3425,9 @@ registrarCmd
 
 interface VNSRegistrarPostUpdateOptions {
   apid: number;
-  registry: number;
-  rootNode: string;
-  paymentToken: number;
+  //registry: number;
+  //rootNode: string;
+  //paymentToken: number;
   debug?: boolean;
   simulate?: boolean;
   sender?: string;
@@ -3443,11 +3449,12 @@ export const vnsRegistrarPostUpdate: any = async (
       sk: secretKey,
     }
   );
-  const vnsRegistrarPostUpdateR = await ci.post_update(
-    Number(options.registry),
-    namehash(options.rootNode),
-    Number(options.paymentToken)
-  );
+  const vnsRegistrarPostUpdateR = await ci
+    .post_update
+    //Number(options.registry),
+    //namehash(options.rootNode),
+    //Number(options.paymentToken)
+    ();
   if (options.debug) {
     console.log(vnsRegistrarPostUpdateR);
   }
@@ -3464,9 +3471,9 @@ registrarCmd
   .command("post-update")
   .description("Post update the registrar")
   .requiredOption("-a, --apid <number>", "The registrar ID")
-  .requiredOption("-r, --registry <number>", "The registry ID")
-  .requiredOption("-n, --root-node <string>", "The root node to set")
-  .requiredOption("-p, --payment-token <number>", "The payment token ID")
+  //.requiredOption("-r, --registry <number>", "The registry ID")
+  //.requiredOption("-n, --root-node <string>", "The root node to set")
+  //.requiredOption("-p, --payment-token <number>", "The payment token ID")
   .option("-d, --debug", "Debug mode")
   .option("-s, --simulate", "Simulate the transaction")
   .action(async (options: VNSRegistrarPostUpdateOptions) => {
@@ -4046,6 +4053,172 @@ registrarCmd
   .option("-d, --debug", "Debug mode")
   .action(async (options: VNSRegistrarGetAppIdOptions) => {
     const res = await getAppId(options);
+    console.log(res);
+  });
+
+interface VNSRegistrarUpdateSubnameRegistrarOptions {
+  apid: number;
+  resolver: number;
+  node: string;
+  debug?: boolean;
+  simulate?: boolean;
+  addr?: string;
+  sk?: Uint8Array;
+}
+
+registrarCmd
+  .command("update-subname-registrar")
+  .requiredOption("-a, --apid <number>", "The VNS registrar ID")
+  .requiredOption("-r, --resolver <number>", "The VNS resolver ID")
+  .option("-d, --debug", "Debug mode")
+  .action(async (options: VNSRegistrarUpdateSubnameRegistrarOptions) => {
+    if (options.debug) {
+      console.log("options", options);
+    }
+    try {
+      const rootNode = await vnsRegistrarGetRootNode({
+        apid: options.apid,
+      });
+      if (!rootNode) {
+        throw new Error("Failed to get root node or empty");
+      }
+      const nodeHash = Buffer.from(rootNode).toString("hex");
+      const nameR = await getName({
+        apid: options.resolver,
+        nodeHash,
+      });
+      const name = stripTrailingZeroBytes(Buffer.from(nameR).toString("utf8"));
+      if (!nameR) {
+        throw new Error("Failed to get name or empty");
+      }
+      console.log("name", name);
+      const subnameRegistrar = {
+        subnameRegistrar: name,
+        contract: options.apid,
+      };
+      console.log("subnameRegistrar", subnameRegistrar);
+      vnsRegistrarSetText({
+        apid: options.apid,
+        key: "subname_registrar",
+        value: JSON.stringify(subnameRegistrar),
+      });
+    } catch (e) {
+      console.log(e);
+    }
+  });
+
+interface VNSRegistrarGetOwnerOptions {
+  apid: number;
+  debug?: boolean;
+}
+
+export const getOwner: any = async (options: VNSRegistrarGetOwnerOptions) => {
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrarSpec.contract.methods),
+    {
+      addr: addr,
+      sk: sk,
+    }
+  );
+  const owner = await ci.get_owner();
+  return owner.returnValue;
+};
+
+registrarCmd
+  .command("get-owner")
+  .requiredOption("-a, --apid <number>", "The VNS registrar ID")
+  .option("-d, --debug", "Debug mode")
+  .action(async (options: VNSRegistrarGetOwnerOptions) => {
+    const res = await getOwner(options);
+    console.log(res);
+  });
+
+interface GetVersionOptions {
+  apid: number;
+  debug?: boolean;
+}
+
+export const getVersion: any = async (options: GetVersionOptions) => {
+  const contract = new VNSRegistrarClient(
+    {
+      resolveBy: "id",
+      id: Number(options.apid),
+      sender: {
+        addr: addr,
+        sk: sk,
+      },
+    },
+    algodClient
+  );
+  const gs = await contract.getGlobalState();
+  const contractVersion = gs.contractVersion?.asNumber();
+  const deploymentVersion = gs.deploymentVersion?.asNumber();
+  return `Contract Version: ${contractVersion} Deployment Version: ${deploymentVersion}`;
+};
+
+registrarCmd
+  .command("get-version")
+  .requiredOption("-a, --apid <number>", "The VNS registrar ID")
+  .option("-d, --debug", "Debug mode")
+  .action(async (options: GetVersionOptions) => {
+    const res = await getVersion(options);
+    console.log(res);
+  });
+
+interface VNSRegistrarSetTextOptions {
+  apid: number;
+  key: string;
+  value: string;
+  debug?: boolean;
+  simulate?: boolean;
+  sender?: string;
+  sk?: Uint8Array;
+}
+
+export const vnsRegistrarSetText: any = async (
+  options: VNSRegistrarSetTextOptions
+) => {
+  const address = options.sender || addr;
+  const secretKey = options.sk || sk;
+  const ci = new CONTRACT(
+    Number(options.apid),
+    algodClient,
+    indexerClient,
+    makeSpec(VNSRegistrarSpec.contract.methods),
+    {
+      addr: address,
+      sk: secretKey,
+    }
+  );
+  ci.setFee(4000);
+  const setTextR = await ci.setText(
+    stringToUint8Array(options.key, 22),
+    stringToUint8Array(options.value, 256)
+  );
+  if (options.debug) {
+    console.log("setTextR", setTextR);
+  }
+  if (setTextR.success) {
+    if (!options.simulate) {
+      await signSendAndConfirm(setTextR.txns, secretKey);
+    }
+    return true;
+  }
+  return false;
+};
+
+registrarCmd
+  .command("set-text")
+  .requiredOption("-a, --apid <number>", "The VNS registrar ID")
+  .requiredOption("-k, --key <string>", "The key to set")
+  .requiredOption("-v, --value <string>", "The value to set")
+  .option("-d, --debug", "Debug mode")
+  .option("-s, --simulate", "Simulate the transaction")
+  .action(async (options: VNSRegistrarSetTextOptions) => {
+    const res = await vnsRegistrarSetText(options);
     console.log(res);
   });
 
