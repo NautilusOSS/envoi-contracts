@@ -3051,15 +3051,15 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         self.grace_period = UInt64(90)  # grace period
         self.controllers = BoxMap(Account, bool)  # controllers
         self.expires = BoxMap(BigUInt, BigUInt)  # expiration timestamps
-        self.renewal_base_fee = UInt64(1)  # renewal base fee
-        self.base_cost = BigUInt(1_000_000)  # base cost (1 USDC)
-        self.cost_multiplier = BigUInt(5)  # cost multiplier (5x)
+        self.renewal_base_fee = UInt64(0)  # renewal base fee (0)
+        self.base_cost = BigUInt(0)  # base cost (0)
+        self.cost_multiplier = BigUInt(1)  # cost multiplier (5x)
         self.base_period = UInt64(365 * 24 * 60 * 60)  # base period (1 year)
         # ownable state
         self.owner = Global.creator_address  # owner address
         # upgradeable state
         self.contract_version = UInt64(1)  # contract version
-        self.deployment_version = UInt64(2)  # deployment version
+        self.deployment_version = UInt64(4)  # deployment version
         self.updatable = bool(1)  # updatable
         self.upgrader = Global.creator_address  # upgrader address
         # stakeable state
@@ -3072,7 +3072,7 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
     ) -> None:
         assert Txn.sender == self.upgrader, "sender must be upgrader"
         self.contract_version = UInt64(1)
-        self.deployment_version = UInt64(3)
+        self.deployment_version = UInt64(4)
 
     # owneable methods
 
@@ -3134,8 +3134,8 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         assert (
             Txn.sender == sender
             or Txn.sender == Account.from_bytes(self._getApproved(tokenId).bytes)
-            or self._isApprovedForAll(Account.from_bytes(owner.bytes), Txn.sender) 
-            or Txn.sender == self.owner # allow owner to transfer to any address
+            or self._isApprovedForAll(Account.from_bytes(owner.bytes), Txn.sender)
+            or Txn.sender == self.owner  # allow owner to transfer to any address
         ), "sender must be owner or approved"
         nft = self.nft_data.get(key=tokenId, default=self._invalid_nft_data()).copy()
         nft.owner = arc4.Address(recipient)
@@ -3254,6 +3254,7 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         self, name: Bytes32, owner: arc4.Address, duration: arc4.UInt256
     ) -> Bytes32:
         """Register a new name"""
+        assert self.base_cost > BigUInt(0), "base cost must be greater than 0"
         assert self.check_name(name).native, "name must be valid"
         unit = self.base_cost * self.cost_multiplier
         return Bytes32.from_bytes(
@@ -3312,10 +3313,11 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         # - pay for storage (network)
         # - pay for registration (arc200)
         # ------------------------------------------------------------
-        payment_amount = require_payment(Txn.sender)  # pay min amount for storage
-        assert (
-            payment_amount >= mint_cost + mint_fee  # 336700 + 0
-        ), "payment amount accurate"
+        # payment_amount = require_payment(Txn.sender)  # pay min amount for storage
+        # assert (
+        #     payment_amount >= mint_cost + mint_fee  # 336700 + 0
+        # ), "payment amount accurate"
+
         # requires allowance from Txn.sender to this contract
 
         registration_fee = self._get_price(unit, name.bytes, duration)
@@ -3380,7 +3382,8 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
     @arc4.abimethod
     def renew(self, name: Bytes32, duration: arc4.UInt256) -> None:
         """Renew an existing registration"""
-        unit = self.base_cost * self.cost_multiplier
+        assert self.renewal_base_fee > 0, "renewal base fee must be greater than 0"
+        unit = BigUInt(self.renewal_base_fee)
         self._renew(
             self._safe_name(name),
             duration.native,
@@ -3640,6 +3643,14 @@ class VNSRegistrar(ARC72Token, Upgradeable, Stakeable):
         """
         assert Txn.sender == self.owner, "only owner"
         self.cost_multiplier = cost_multiplier.native
+
+    @arc4.abimethod
+    def set_renewal_base_fee(self, renewal_base_fee: arc4.UInt64) -> None:
+        """
+        Set renewal base fee for registration/renewal
+        """
+        assert Txn.sender == self.owner, "only owner"
+        self.renewal_base_fee = renewal_base_fee.native
 
     @arc4.abimethod
     def set_base_cost(self, base_cost: arc4.UInt256) -> None:
